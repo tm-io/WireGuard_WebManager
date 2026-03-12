@@ -1,0 +1,27 @@
+# WireGuard Web Manager - Web アプリ（Rust 版・一般ユーザー実行）
+#
+# 環境依存（ユーザー名・パス）を unit に埋め込まないためのテンプレート。
+#
+# 使い方（例: 実行ユーザーを appuser にする）:
+#   sudo cp deploy/wg-manager-web@.service /etc/systemd/system/
+#   sudo cp deploy/wg-manager.env.example /etc/wg-manager/wg-manager.env
+#   sudoedit /etc/wg-manager/wg-manager.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wg-manager-web@appuser
+[Unit]
+Description=WireGuard Web Manager (Rust - Web UI)
+After=network.target wg-manager-worker.service
+Wants=wg-manager-worker.service
+
+[Service]
+Type=simple
+User=%i
+EnvironmentFile=-/etc/wg-manager/wg-manager.env
+# CONFIG_PATH は Rust 側で相対パス解決の基準になるため、絶対パス推奨
+Environment=CONFIG_PATH=${WGWM_CONFIG_PATH}
+ExecStart=${WGWM_WG_MANAGER_BIN}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

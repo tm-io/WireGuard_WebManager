@@ -22,4 +22,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.27", default-features = false, features = ["process", "user"] }
+nix = { version = "0.27", default-features = false, features = ["process", "user", "fs"] }

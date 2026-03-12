@@ -44,8 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let settings = Settings::load(Some(config_path.as_path()))
         .map_err(|e| format!("config: {}", e))?;
 
-    let db_path = std::path::Path::new(&settings.paths.db_path);
-    let database = db::Database::open(db_path)?;
+    let base_dir = base_dir_from_config_path(&config_path);
+    let db_path = resolve_pathbuf_under_base(&base_dir, Path::new(&settings.paths.db_path));
+    let database = db::Database::open(db_path.as_path())?;
     database.init()?;
 
     let state = Arc::new(AppState {
@@ -213,8 +214,27 @@ async fn docs_view_page(
 }
 
 fn docs_dir() -> std::path::PathBuf {
-    // 実行時はプロジェクトルートを想定（systemd WorkingDirectory）
-    std::path::Path::new("docs").to_path_buf()
+    // config.yaml の場所を基準に docs/ を探す（WorkingDirectory に依存しない）
+    let config_path = std::env::var("CONFIG_PATH").ok().unwrap_or_else(|| "config.yaml".to_string());
+    let base = base_dir_from_config_path(Path::new(&config_path));
+    base.join("docs")
+}
+
+fn base_dir_from_config_path(config_path: &Path) -> std::path::PathBuf {
+    // 可能なら config.yaml の親ディレクトリ。相対や不正ならカレントを採用。
+    config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+}
+
+fn resolve_pathbuf_under_base(base: &Path, p: &Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    }
 }
 
 fn safe_doc_path(name: &str) -> Option<std::path::PathBuf> {

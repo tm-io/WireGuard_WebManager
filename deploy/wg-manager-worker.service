@@ -1,6 +1,13 @@
 # WireGuard Web Manager - 特権 Worker（Rust 版・root 実行）
-# 使い方: パスを環境に合わせて編集し、rust-wg-manager-worker.service として
-#         /etc/systemd/system/ にコピーしてから daemon-reload / enable --now する。
+#
+# 環境依存（パス）を unit に埋め込まないため、EnvironmentFile から読み込む。
+#
+# 使い方:
+#   sudo cp deploy/wg-manager-worker.service /etc/systemd/system/
+#   sudo cp deploy/wg-manager.env.example /etc/wg-manager/wg-manager.env
+#   sudoedit /etc/wg-manager/wg-manager.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wg-manager-worker
 [Unit]
 Description=WireGuard Web Manager Worker (Rust - root)
 After=network.target
@@ -8,9 +15,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/kanri/wireguard-web-manager
-Environment=CONFIG_PATH=/home/kanri/wireguard-web-manager/config.yaml
-ExecStart=/home/kanri/wireguard-web-manager/rust/target/release/wg-worker
+EnvironmentFile=-/etc/wg-manager/wg-manager.env
+Environment=CONFIG_PATH=${WGWM_CONFIG_PATH}
+ExecStart=${WGWM_WG_WORKER_BIN}
 Restart=on-failure
 RestartSec=5
 

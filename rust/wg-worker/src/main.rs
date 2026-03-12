@@ -6,6 +6,11 @@ use std::path::Path;
 use std::process::Command;
 use wg_common::config::Settings;
 use wg_common::worker_protocol::PeerStat;
+#[cfg(unix)]
+use {
+    nix::unistd::{chown, Gid, Uid, User},
+    std::os::unix::fs::PermissionsExt,
+};
 
 fn load_config() -> Result<Settings, String> {
     let path = std::env::var("CONFIG_PATH")
@@ -182,12 +187,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = std::os::unix::net::UnixListener::bind(socket_path)?;
     #[cfg(unix)]
     {
+        // Python 版と同じ: chmod 660, chown を socket_owner に設定（存在しない場合はスキップ）
         let meta = std::fs::metadata(socket_path)?;
-        // chown to socket_owner (optional; need nix or libc)
-        use std::os::unix::fs::PermissionsExt;
         let mut perms = meta.permissions();
         perms.set_mode(0o660);
         std::fs::set_permissions(socket_path, perms)?;
+
+        match User::from_name(socket_owner).map_err(|e| format!("lookup user: {e}"))? {
+            Some(u) => {
+                let uid = Uid::from_raw(u.uid.as_raw());
+                let gid = Gid::from_raw(u.gid.as_raw());
+                if let Err(e) = chown(socket_path, Some(uid), Some(gid)) {
+                    eprintln!("wg-worker: chown({socket_owner}) failed: {e}");
+                }
+            }
+            None => {
+                eprintln!("wg-worker: user {socket_owner:?} not found; socket ownership not changed.");
+            }
+        }
     }
 
     eprintln!("Listening on {} (interface={})", socket_path.display(), interface);
