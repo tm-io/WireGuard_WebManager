@@ -28,7 +28,7 @@ pip install -r requirements.txt
 - プロジェクトルートの `config.yaml` を環境に合わせて編集する。
 - **Worker 利用（推奨）** のため、次を設定する。
   - **paths.wg_worker_socket** … Worker のソケットパス（例: `"/var/run/wg-manager.sock"`）。初期値でこのパスが入っていればそのままでよい。
-  - **paths.socket_owner** … Web アプリを動かすユーザー名（例: `"kanri"`）。
+  - **paths.socket_owner** … Web アプリを動かすユーザー名（例: `"wgwm"` など任意のシステムユーザー）。
 - あわせて次も確認・変更する。
   - **app.port** … 他サービス（Zabbix 等）と重ならないポート。
   - **app.auth_username** / **app.auth_password** … ログイン用の認証情報。

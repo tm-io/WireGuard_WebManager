@@ -24,7 +24,7 @@ paths:
   db_path: "data/wg-manager.db"
   wg_conf_dir: "/etc/wireguard"
   wg_worker_socket: "/var/run/wg-manager.sock"   # 推奨。空にすると sudo 利用（sudoers 要設定）
-  socket_owner: "kanri"   # ソケットの所有者（Web アプリを動かすユーザー名）
+  socket_owner: "wgwm"   # ソケットの所有者（Web アプリを動かすユーザー名）
 ```
 
 - **wg_worker_socket** にソケットパスを指定すると、Web アプリは **Worker 経由のみ** で wg 操作を行い、sudo は使いません（推奨）。

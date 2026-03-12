@@ -174,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let interface = settings.wireguard.interface.as_str();
     let socket_owner = settings.paths.socket_owner.trim();
-    let socket_owner = if socket_owner.is_empty() { "kanri" } else { socket_owner };
+    let socket_owner = if socket_owner.is_empty() { "wgwm" } else { socket_owner };
 
     let socket_path = std::path::Path::new(socket_path);
     if let Some(parent) = socket_path.parent() {

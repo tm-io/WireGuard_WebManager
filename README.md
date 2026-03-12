@@ -76,13 +76,13 @@ app:
   host: "0.0.0.0"         # 直接受ける場合は 0.0.0.0、リバースプロキシ経由なら 127.0.0.1
   port: 8080
   auth_username: "admin"
-  auth_password: "password123"
+  auth_password: "CHANGE_ME_PASSWORD"  # 本番では必ず変更すること
 
 paths:
   db_path: "data/wg-manager.db"
   wg_conf_dir: "/etc/wireguard"
   wg_worker_socket: "/var/run/wg-manager.sock"  # Worker 利用（推奨）。空で sudo 利用
-  socket_owner: "kanri"   # Web アプリを動かすユーザー名
+  socket_owner: "wgwm"   # Web アプリを動かすユーザー名
 
 wireguard:
   interface: "wg0"

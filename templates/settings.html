@@ -63,7 +63,7 @@
             </div>
             <div class="form-row">
                 <label for="paths_socket_owner">socket_owner</label>
-                <input type="text" id="paths_socket_owner" name="paths.socket_owner" placeholder="kanri">
+                <input type="text" id="paths_socket_owner" name="paths.socket_owner" placeholder="wgwm">
             </div>
         </div>
         <div class="settings-section">
@@ -126,7 +126,7 @@
                 db_path: document.getElementById("paths_db_path").value.trim() || "data/wg-manager.db",
                 wg_conf_dir: document.getElementById("paths_wg_conf_dir").value.trim() || "/etc/wireguard",
                 wg_worker_socket: document.getElementById("paths_wg_worker_socket").value.trim(),
-                socket_owner: document.getElementById("paths_socket_owner").value.trim() || "kanri",
+                socket_owner: document.getElementById("paths_socket_owner").value.trim() || "wgwm",
             },
             wireguard: {
                 interface: document.getElementById("wg_interface").value.trim() || "wg0",

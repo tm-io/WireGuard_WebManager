@@ -23,7 +23,7 @@
 | **db_path** | SQLite の DB ファイルパス | 相対パスはプロジェクトルート基準。例: `"data/wg-manager.db"`。 |
 | **wg_conf_dir** | WireGuard 設定が置かれるディレクトリ | 例: `"/etc/wireguard"`。 |
 | **wg_worker_socket** | Worker の UNIX ソケットパス | **推奨:** パスを指定して Worker 経由（sudo 不要）。例: `"/var/run/wg-manager.sock"`。Worker 起動時にソケットと親ディレクトリは自動作成される。空 `""` にすると Web アプリから sudo で wg 実行（sudoers 要設定）。 |
-| **socket_owner** | ソケットの所有者ユーザー名 | Worker がソケットを chown する先。Web アプリを動かすユーザー名を指定。例: `"kanri"`。 |
+| **socket_owner** | ソケットの所有者ユーザー名 | Worker がソケットを chown する先。Web アプリを動かすユーザー名を指定。例: `"wgwm"`。 |
 
 ### wireguard（WireGuard まわり）
 

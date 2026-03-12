@@ -54,7 +54,7 @@ impl Default for PathsConfig {
             db_path: "data/wg-manager.db".to_string(),
             wg_conf_dir: "/etc/wireguard".to_string(),
             wg_worker_socket: String::new(),
-            socket_owner: "kanri".to_string(),
+            socket_owner: "wgwm".to_string(),
         }
     }
 }
