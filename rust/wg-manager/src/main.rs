@@ -438,7 +438,21 @@ async fn api_peers_create(
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
-    // 作成直後は DB 登録のみ（Python 版と同様）。有効/無効トグル時に wg set で反映。
+    // 作成直後に wg set で即有効化する（Peer 作成 = すぐ使える状態）。
+    let allowed = vec![format!("{}/32", peer.allocated_ip)];
+    let r = if !settings.paths.wg_worker_socket.trim().is_empty() {
+        wg_client::peer_set(&settings, &peer.public_key, &allowed, peer.pre_shared_key.as_deref())
+    } else {
+        wg_local::sudo_wg_set_peer(
+            &settings.wireguard.interface,
+            &peer.public_key,
+            &allowed.join(","),
+            peer.pre_shared_key.as_deref(),
+        )
+    };
+    if let Err(e) = r {
+        return (StatusCode::SERVICE_UNAVAILABLE, e).into_response();
+    }
     Json(PeerDto {
         id: peer.id,
         name: peer.name,
