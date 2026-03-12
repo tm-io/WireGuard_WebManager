@@ -18,6 +18,10 @@ build/
 # ローカルDB
 data/
 
+# Rust
+rust/target/
+**/target/
+
 # IDE
 .idea/
 .vscode/

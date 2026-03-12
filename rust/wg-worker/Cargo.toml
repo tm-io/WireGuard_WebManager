@@ -1,0 +1,25 @@
+[package]
+name = "wg-worker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "WireGuard Web Manager - privileged Worker (root)"
+
+[[bin]]
+name = "wg-worker"
+path = "src/main.rs"
+
+[dependencies]
+wg-common = { path = "../wg-common" }
+# Config / JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+# Temp file for preshared-key
+tempfile = "3"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", default-features = false, features = ["process", "user"] }

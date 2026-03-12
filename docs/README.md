@@ -10,6 +10,7 @@
 | [02-config.md](02-config.md) | config.yaml のカスタマイズ（設定項目の一覧。画面の「設定」からも編集可能） |
 | [03-operation.md](03-operation.md) | 運用イメージ（起動・停止・再起動・ログ確認。Worker 利用を標準、sudo は代替） |
 | [WORKER.md](WORKER.md) | Worker による権限分離（構成・設定・トラブルシュート） |
+| [04-rust-migration.md](04-rust-migration.md) | Rust 移行方針（完全リファクタ・マルチ環境・最小依存の命令と実装方針） |
 
 ---
 
@@ -17,3 +18,4 @@
 - **ポートや認証・WireGuard の値を変えたい** → [02-config.md](02-config.md)。画面の「設定」からも変更可能。
 - **普段の起動・再起動の手順を確認したい** → [03-operation.md](03-operation.md)。
 - **Worker の仕組みやトラブルシュート** → [WORKER.md](WORKER.md)。
+- **Rust への書き換え方針・ビルド** → [04-rust-migration.md](04-rust-migration.md)。

@@ -1,15 +1,8 @@
-# WireGuard Web Manager - 特権 Worker（root 実行）
-# Web アプリは一般ユーザーで動作し、wg 操作のみこの Worker にソケット経由で依頼する。
-#
-# 配置手順（手元のターミナルで実行）:
-#   sudo cp /home/kanri/wireguard-web-manager/deploy/wg-manager-worker.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now wg-manager-worker
-#   sudo systemctl status wg-manager-worker
-#
-# プロジェクトを別ディレクトリに置いた場合は、WorkingDirectory / Environment / ExecStart のパスを編集すること。
+# WireGuard Web Manager - 特権 Worker（Rust 版・root 実行）
+# 使い方: パスを環境に合わせて編集し、rust-wg-manager-worker.service として
+#         /etc/systemd/system/ にコピーしてから daemon-reload / enable --now する。
 [Unit]
-Description=WireGuard Web Manager Worker (root)
+Description=WireGuard Web Manager Worker (Rust - root)
 After=network.target
 
 [Service]
@@ -17,7 +10,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/kanri/wireguard-web-manager
 Environment=CONFIG_PATH=/home/kanri/wireguard-web-manager/config.yaml
-ExecStart=/home/kanri/wireguard-web-manager/.venv/bin/python3 /home/kanri/wireguard-web-manager/wg_worker.py
+ExecStart=/home/kanri/wireguard-web-manager/rust/target/release/wg-worker
 Restart=on-failure
 RestartSec=5
 

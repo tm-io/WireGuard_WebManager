@@ -1,15 +1,8 @@
-# WireGuard Web Manager - Web アプリ（一般ユーザー実行）
-# Worker のあとに起動すること。config.yaml の host/port で待ち受ける。
-#
-# 配置手順（手元のターミナルで実行）:
-#   sudo cp /home/kanri/wireguard-web-manager/deploy/wg-manager-web.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now wg-manager-web
-#   sudo systemctl status wg-manager-web
-#
-# プロジェクトを別ディレクトリに置いた場合は、WorkingDirectory / ExecStart のパスを編集すること。
+# WireGuard Web Manager - Web アプリ（Rust 版・一般ユーザー実行）
+# 使い方: パスを環境に合わせて編集し、rust-wg-manager-web.service として
+#         /etc/systemd/system/ にコピーしてから daemon-reload / enable --now する。
 [Unit]
-Description=WireGuard Web Manager (Web UI)
+Description=WireGuard Web Manager (Rust - Web UI)
 After=network.target wg-manager-worker.service
 Wants=wg-manager-worker.service
 
@@ -17,7 +10,8 @@ Wants=wg-manager-worker.service
 Type=simple
 User=kanri
 WorkingDirectory=/home/kanri/wireguard-web-manager
-ExecStart=/home/kanri/wireguard-web-manager/.venv/bin/python3 -m app.main
+Environment=CONFIG_PATH=/home/kanri/wireguard-web-manager/config.yaml
+ExecStart=/home/kanri/wireguard-web-manager/rust/target/release/wg-manager
 Restart=on-failure
 RestartSec=5
 
