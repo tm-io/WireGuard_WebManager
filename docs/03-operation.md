@@ -17,7 +17,7 @@
 
 ---
 
-## 起動・停止（Worker 利用・標準）
+## 起動・停止（Worker 利用・標準, Rust 版）
 
 ### 起動順
 
@@ -28,34 +28,33 @@
    sudo systemctl enable --now wg-manager-worker
    ```
 2. **そのあと Web アプリを起動する**（一般ユーザー）
-   - **Web アプリも systemd で動かしている場合**
+   - **Web アプリも systemd で動かしている場合（Rust 版）**
      ```bash
-     sudo systemctl start wg-manager-web
+     # <webuser> は Web を動かす Unix ユーザー名（例: wgwm）
+     sudo systemctl start wg-manager-web@<webuser>
      # または enable 済みなら
-     sudo systemctl enable --now wg-manager-web
+     sudo systemctl enable --now wg-manager-web@<webuser>
      ```
-   - **手動で動かす場合**
+   - **手動で Rust バイナリを動かす場合**
      ```bash
-     cd /home/kanri/wireguard-web-manager
-     source .venv/bin/activate
-     python -m app.main
+     cd /path/to/wireguard-web-manager
+     ./rust/target/release/wg-manager
      ```
 
 ### 停止
 
-- **Web アプリ（systemd）** … `sudo systemctl stop wg-manager-web`。
+- **Web アプリ（systemd）** … `sudo systemctl stop wg-manager-web@<webuser>`。
 - **Web アプリ（手動）** … 起動したターミナルで `Ctrl+C`。
 - **Worker** … 必要なら `sudo systemctl stop wg-manager-worker`。
 
 ---
 
-## 起動・停止（sudo 利用・非推奨）
+## 起動・停止（sudo 利用・非推奨, Rust 版）
 
 - **Web アプリの起動のみ**（Worker は使わない）
   ```bash
-  cd /home/kanri/wireguard-web-manager
-  source .venv/bin/activate
-  python -m app.main
+  cd /path/to/wireguard-web-manager
+  sudo CONFIG_PATH=/path/to/config.yaml ./rust/target/release/wg-manager
   ```
 - **停止** … 起動したターミナルで `Ctrl+C`。
 
@@ -64,11 +63,11 @@
 ## 再起動
 
 - **Web アプリだけ再起動する**  
-  - systemd: `sudo systemctl restart wg-manager-web`  
-  - 手動: 一度停止してから再度 `python -m app.main` を実行する。
+  - systemd: `sudo systemctl restart wg-manager-web@<webuser>`  
+  - 手動: 一度停止してから再度 `./rust/target/release/wg-manager` を実行する。
 - **Worker を再起動する**  
   `sudo systemctl restart wg-manager-worker`。  
-  Worker を再起動した場合は、必要に応じて Web アプリも再起動する（systemd なら `sudo systemctl restart wg-manager-web`）。
+  Worker を再起動した場合は、必要に応じて Web アプリも再起動する（systemd なら `sudo systemctl restart wg-manager-web@<webuser>`）。
 
 ---
 
@@ -96,7 +95,7 @@
 |------|---------------------|-----------|
 | config の `wg_worker_socket` | ソケットパスを指定 | 空 `""` |
 | sudoers | 不要 | 要設定 |
-| 起動順 | 1. Worker → 2. Web アプリ（systemd なら両方 enable で自動） | Web アプリのみ |
+| 起動順 | 1. Worker → 2. Web アプリ（systemd なら `wg-manager-worker` / `wg-manager-web@<webuser>` を enable） | Web アプリのみ |
 | 停止 | Web アプリ停止（systemd: stop）、必要なら Worker も stop | Web アプリを Ctrl+C |
 
 設定の詳細は [02-config.md](02-config.md)、Worker の詳細は [WORKER.md](WORKER.md) を参照してください。マニュアル（本 docs）はログイン後の画面で「ドキュメント」からも参照できます（`/manual`）。

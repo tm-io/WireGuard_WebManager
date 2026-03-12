@@ -21,7 +21,7 @@
 
 - Rust ソース・ビルド成果物: **`rust/`** ディレクトリに配置する。  
 - ビルド手順・起動方法: 本ドキュメントおよび `rust/README.md` に記載する。  
-- 移行完了後: Python 実装を削除し、Rust をルートの主実装とする方針でよい（その際は `docs/` の参照先を Rust 用に更新する）。
+- Python 実装は `archive/python/` にアーカイブし、Rust をルートの主実装とする。
 
 ## 機能の対応関係
 
@@ -45,7 +45,7 @@ cargo build --release
 ```
 
 systemd では `ExecStart` を上記バイナリに合わせて修正する。  
-Rust 用の unit 例は `deploy/rust-wg-manager-web.service.example` および `deploy/rust-wg-manager-worker.service.example` を参照し、パスを環境に合わせて編集してから `/etc/systemd/system/` に配置する。
+Rust 用の unit 例は `deploy/wg-manager-web@.service` および `deploy/wg-manager-worker.service`、環境変数例は `deploy/wg-manager.env.example` を参照し、パスやユーザー名を環境に合わせて編集してから `/etc/systemd/system/` / `/etc/wg-manager/` に配置する。
 
 ---
 
