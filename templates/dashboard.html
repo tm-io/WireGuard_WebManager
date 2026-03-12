@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}WireGuard Web Manager - ダッシュボード{% endblock %}
+
+{% block extra_css %}
+<style>
+    .wg-outdated { color: #fbbf24; margin-left: 4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-grid">
+    <div class="card">
+        <div class="card-title">サーバー情報</div>
+        <div class="card-value" id="card-server-status">—</div>
+        <div class="card-row"><span>公開鍵</span><span id="card-pubkey-status">未取得</span></div>
+        <div class="card-row card-row-wg">
+            <span>バージョン</span>
+            <span id="card-wg-version-wrap">
+                <span id="card-wg-version">—</span>
+                <span id="card-wg-outdated" class="wg-outdated" title="更新を推奨" aria-hidden="true" style="display:none;"> ⚠</span>
+            </span>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-title">Peer サマリー</div>
+        <div class="card-value accent" id="card-peer-total">0</div>
+        <div class="card-row"><span>有効</span><span id="card-peer-active">0</span></div>
+        <div class="card-row"><span>無効</span><span id="card-peer-inactive">0</span></div>
+        <a href="/peers" class="card-link">ピア一覧へ →</a>
+    </div>
+    <div class="card">
+        <div class="card-title">アプリ情報</div>
+        <div class="card-value">WireGuard Web Manager</div>
+        <div class="card-row"><span>認証</span><span>ログイン済み</span></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    function updateDashboardCards(peers) {
+        var total = peers ? peers.length : 0;
+        var active = peers ? peers.filter(function(p) { return p.is_active; }).length : 0;
+        var inactive = total - active;
+        var elTotal = document.getElementById("card-peer-total");
+        var elActive = document.getElementById("card-peer-active");
+        var elInactive = document.getElementById("card-peer-inactive");
+        if (elTotal) elTotal.textContent = String(total);
+        if (elActive) elActive.textContent = String(active);
+        if (elInactive) elInactive.textContent = String(inactive);
+    }
+    function updateServerCard(ok, hasKey) {
+        var elStatus = document.getElementById("card-server-status");
+        var elPubkey = document.getElementById("card-pubkey-status");
+        if (elStatus) { elStatus.textContent = ok ? "稼働中" : "未接続"; elStatus.className = "card-value " + (ok ? "accent" : ""); }
+        if (elPubkey) elPubkey.textContent = hasKey ? "取得済み" : "未取得";
+    }
+    async function fetchServerStatus() {
+        try {
+            var res = await fetch("/api/server/public-key");
+            var ok = res.ok;
+            var hasKey = false;
+            if (ok) {
+                var data = await res.json();
+                hasKey = !!(data && data.public_key);
+            }
+            updateServerCard(ok, hasKey);
+        } catch (e) {
+            updateServerCard(false, false);
+        }
+    }
+    function updateWgVersion(data) {
+        var el = document.getElementById("card-wg-version");
+        var elWarn = document.getElementById("card-wg-outdated");
+        if (!el) return;
+        if (data && data.current) {
+            el.textContent = "v" + data.current;
+            if (data.outdated && data.latest) {
+                el.title = "最新: v" + data.latest;
+                if (elWarn) { elWarn.style.display = "inline"; elWarn.title = "更新を推奨（最新: v" + data.latest + "）"; }
+            } else {
+                if (elWarn) elWarn.style.display = "none";
+            }
+        } else {
+            el.textContent = "取得できません";
+            if (elWarn) elWarn.style.display = "none";
+        }
+    }
+    async function fetchWgVersion() {
+        try {
+            var res = await fetch("/api/server/wg-version");
+            if (!res.ok) return;
+            var data = await res.json();
+            updateWgVersion(data);
+        } catch (e) { updateWgVersion(null); }
+    }
+    async function fetchPeersForSummary() {
+        try {
+            var res = await fetch("/api/peers/");
+            if (!res.ok) return;
+            var data = await res.json();
+            updateDashboardCards(data);
+        } catch (e) {}
+    }
+    fetchServerStatus();
+    fetchWgVersion();
+    fetchPeersForSummary();
+})();
+</script>
+{% endblock %}

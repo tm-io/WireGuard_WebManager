@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+PyYAML
+Jinja2
+qrcode
+python-multipart
+pillow
+markdown

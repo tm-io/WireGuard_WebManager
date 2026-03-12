@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}WireGuard Web Manager - ドキュメント{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="panel-title">マニュアル</div>
+    <div class="panel-label">docs フォルダ内の Markdown を参照できます。</div>
+    <ul class="docs-list" style="margin: 14px 0 0; padding-left: 20px; list-style: none;">
+        {% for e in entries %}
+        <li style="margin-bottom: 10px;">
+            <a href="/manual/view/{{ e.name }}" style="color: var(--accent); text-decoration: none;">{{ e.title }}</a>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endblock %}

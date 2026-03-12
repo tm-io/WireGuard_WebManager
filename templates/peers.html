@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% block title %}WireGuard Web Manager - ピア一覧{% endblock %}
+
+{% block extra_css %}
+<style>
+    .peer-menu { position: relative; display: inline-block; }
+    .peer-menu-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px;
+        padding: 0; border: 1px solid rgba(148, 163, 184, 0.4);
+        border-radius: 6px; background: rgba(15, 23, 42, 0.9);
+        color: var(--text-muted); font-size: 1rem; line-height: 1; cursor: pointer;
+    }
+    .peer-menu-btn:hover { background: rgba(34, 197, 94, 0.12); color: var(--text); border-color: rgba(34, 197, 94, 0.4); }
+    .peer-menu-dropdown {
+        display: none; position: absolute; right: 0; top: 100%; margin-top: 4px;
+        min-width: 160px; padding: 4px;
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        z-index: 20;
+    }
+    .peer-menu-open .peer-menu-dropdown { display: block; }
+    .peer-menu-item {
+        display: block; width: 100%; box-sizing: border-box;
+        padding: 8px 12px; margin: 0; border: none; border-radius: 6px;
+        background: transparent; color: var(--text); font-size: 0.8rem;
+        text-align: left; cursor: pointer;
+    }
+    .peer-menu-item:hover { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
+    .peer-actions-cell { width: 52px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="panel secondary">
+    <div class="peers-header">
+        <div>
+            <div class="panel-title">ピア一覧</div>
+            <div class="panel-label">クライアントの追加・有効/無効・QRコード・削除</div>
+        </div>
+        <button class="btn" id="btn-add-peer">
+            <span class="dot"></span>
+            <span>Peer を追加</span>
+        </button>
+    </div>
+    <div class="rows" style="margin-bottom:8px;">
+        <div class="row">
+            <span>サーバー公開鍵</span>
+            <span>
+                <span class="pill-input">
+                    <input id="server-pubkey-input" type="text" placeholder="例: wg show wg0 public-key の結果">
+                    <small id="server-pubkey-status">未設定</small>
+                </span>
+            </span>
+        </div>
+        <div class="row">
+            <span></span>
+            <span>
+                <button class="action-link" id="btn-fetch-server-pubkey">サーバーから自動取得</button>
+            </span>
+        </div>
+    </div>
+    <table class="table" id="peers-table">
+        <thead>
+        <tr>
+            <th style="width:6%;">No.</th>
+            <th style="width:22%;">名前</th>
+            <th style="width:18%;">IP</th>
+            <th style="width:13%;">状態</th>
+            <th style="width:19%;">最終通信</th>
+            <th style="width:20%;">トラフィック</th>
+            <th class="peer-actions-cell" style="width:8%;">操作</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr id="peers-empty-row">
+            <td colspan="7" style="color: var(--text-muted); padding: 10px 8px;">
+                まだ Peer は登録されていません。「Peer を追加」ボタンから作成できます。
+            </td>
+        </tr>
+        </tbody>
+    </table>
+    <p class="hint">
+        Peer 追加時には自動的に鍵生成とIP割り当てが実行されます。<br>
+        <strong>.conf</strong> … Windows/Mac/Linux 用。ファイルをダウンロードし、WireGuard アプリでインポート。<br>
+        <strong>QR</strong> … スマホ用。QRコードを WireGuard アプリで読み取り。いずれも上部の「サーバー公開鍵」を設定してください。
+    </p>
+</section>
+{% endblock %}
+
+{% block modals %}
+<div class="modal-backdrop" id="qr-modal">
+    <div class="modal">
+        <h2>WireGuard クライアントQRコード</h2>
+        <p id="qr-modal-title"></p>
+        <img id="qr-modal-image" alt="WireGuard client QR code">
+        <button id="qr-modal-close">閉じる</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const $ = (id) => document.getElementById(id);
+    const serverPubkeyInput = $("server-pubkey-input");
+    const serverPubkeyStatus = $("server-pubkey-status");
+    const peersTableBody = document.querySelector("#peers-table tbody");
+    const peersEmptyRow = $("peers-empty-row");
+    const qrModal = $("qr-modal");
+    const qrModalTitle = $("qr-modal-title");
+    const qrModalImage = $("qr-modal-image");
+    const qrModalClose = $("qr-modal-close");
+    const btnFetchServerPubkey = $("btn-fetch-server-pubkey");
+
+    function getServerPubkey() {
+        return window.localStorage.getItem("wgwm_server_pubkey") || "";
+    }
+    function setServerPubkey(value) {
+        window.localStorage.setItem("wgwm_server_pubkey", value || "");
+        updateServerPubkeyStatus();
+    }
+    function updateServerPubkeyStatus() {
+        const v = getServerPubkey();
+        if (!v) {
+            serverPubkeyStatus.textContent = "未設定";
+            serverPubkeyStatus.style.color = "#f97373";
+        } else {
+            serverPubkeyStatus.textContent = "保存済み";
+            serverPubkeyStatus.style.color = "#22c55e";
+        }
+    }
+
+    async function fetchPeers() {
+        const res = await fetch("/api/peers/");
+        if (!res.ok) {
+            console.error("failed to fetch peers", await res.text());
+            return;
+        }
+        const data = await res.json();
+        renderPeers(data);
+    }
+    function renderPeers(peers) {
+        peersTableBody.innerHTML = "";
+        if (!peers.length) {
+            peersTableBody.appendChild(peersEmptyRow);
+            peersEmptyRow.style.display = "";
+            return;
+        }
+        peersEmptyRow.style.display = "none";
+        peers.forEach(function (p, index) {
+            const tr = document.createElement("tr");
+            tr.setAttribute("data-peer-id", String(p.id));
+            const no = index + 1;
+            tr.innerHTML = `
+                <td>${no}</td>
+                <td>${p.name}</td>
+                <td>${p.allocated_ip}</td>
+                <td>
+                    <button class="badge-status ${p.is_active ? "" : "off"}" data-action="toggle" data-id="${p.id}" data-active="${p.is_active ? "1" : "0"}">
+                        ${p.is_active ? "有効" : "無効"}
+                    </button>
+                </td>
+                <td><span class="peer-last" data-peer-last="${p.id}">-</span></td>
+                <td><span class="peer-traffic" data-peer-traffic="${p.id}">-</span></td>
+                <td>
+                    <div class="peer-menu">
+                        <button type="button" class="peer-menu-btn" aria-label="操作メニュー" title="操作">⋯</button>
+                        <div class="peer-menu-dropdown" role="menu">
+                            <button type="button" class="peer-menu-item" role="menuitem" data-action="conf" data-id="${p.id}">.conf ダウンロード</button>
+                            <button type="button" class="peer-menu-item" role="menuitem" data-action="qr" data-id="${p.id}" data-name="${p.name}">QRコード</button>
+                            <button type="button" class="peer-menu-item" role="menuitem" data-action="delete" data-id="${p.id}">削除</button>
+                        </div>
+                    </div>
+                </td>
+            `;
+            peersTableBody.appendChild(tr);
+        });
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes) return "0 B";
+        const units = ["B","KB","MB","GB","TB"];
+        let i = 0;
+        let v = bytes;
+        while (v >= 1024 && i < units.length - 1) {
+            v /= 1024;
+            i++;
+        }
+        return v.toFixed(1) + " " + units[i];
+    }
+    function formatHandshake(ts) {
+        if (!ts) return "なし";
+        const d = new Date(ts * 1000);
+        return d.toLocaleString();
+    }
+    async function fetchPeerStats() {
+        try {
+            const res = await fetch("/api/server/peer-stats");
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.peers) return;
+            for (const s of data.peers) {
+                const lastEl = document.querySelector(`[data-peer-last="${s.id}"]`);
+                const trafEl = document.querySelector(`[data-peer-traffic="${s.id}"]`);
+                if (lastEl) lastEl.textContent = formatHandshake(s.latest_handshake);
+                if (trafEl) trafEl.textContent = `${formatBytes(s.rx_bytes)} / ${formatBytes(s.tx_bytes)}`;
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    async function createPeer() {
+        const name = window.prompt("新しい Peer の名前を入力してください:", "client-1");
+        if (!name) return;
+        const res = await fetch("/api/peers/", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({name, is_active: true}),
+        });
+        if (!res.ok) {
+            alert("Peer の作成に失敗しました: " + (await res.text()));
+            return;
+        }
+        await fetchPeers();
+        await fetchPeerStats();
+    }
+    async function deletePeer(id) {
+        if (!window.confirm("この Peer を削除しますか？")) return;
+        const res = await fetch(`/api/peers/${id}`, {method: "DELETE"});
+        if (!res.ok) {
+            alert("削除に失敗しました: " + (await res.text()));
+            return;
+        }
+        await fetchPeers();
+        await fetchPeerStats();
+    }
+    async function togglePeer(id, currentActive) {
+        const nextActive = !currentActive;
+        const res = await fetch(`/api/peers/${id}`, {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({is_active: nextActive}),
+        });
+        if (!res.ok) {
+            alert("状態の更新に失敗しました: " + (await res.text()));
+            return;
+        }
+        await fetchPeers();
+        await fetchPeerStats();
+    }
+
+    async function fetchServerPubkeyFromServer() {
+        try {
+            const res = await fetch("/api/server/public-key");
+            if (!res.ok) {
+                alert("サーバー公開鍵の取得に失敗しました: " + (await res.text()));
+                return;
+            }
+            const data = await res.json();
+            if (!data.public_key) {
+                alert("サーバー公開鍵が取得できませんでした。WireGuard が起動しているか確認してください。");
+                return;
+            }
+            serverPubkeyInput.value = data.public_key;
+            setServerPubkey(data.public_key);
+        } catch (e) {
+            console.error(e);
+            alert("サーバー公開鍵の取得中にエラーが発生しました。");
+        }
+    }
+
+    function downloadConf(id) {
+        const pubkey = getServerPubkey();
+        if (!pubkey) {
+            alert("まず上部の「サーバー公開鍵」にサーバーの PublicKey を入力してください。");
+            return;
+        }
+        const url = "/api/peers/" + id + "/conf/download?server_public_key=" + encodeURIComponent(pubkey);
+        window.open(url, "_blank");
+    }
+
+    async function openQrModal(id, name) {
+        const pubkey = getServerPubkey();
+        if (!pubkey) {
+            alert("まず上部の「サーバー公開鍵」にサーバーの PublicKey を入力してください。");
+            return;
+        }
+        qrModalTitle.textContent = `Peer: ${name}`;
+        qrModalImage.src = "";
+        qrModal.style.display = "flex";
+        try {
+            const res = await fetch(`/api/peers/${id}/qr?server_public_key=${encodeURIComponent(pubkey)}`);
+            if (!res.ok) {
+                alert("QRコードの生成に失敗しました: " + (await res.text()));
+                closeQrModal();
+                return;
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            qrModalImage.src = url;
+        } catch (e) {
+            console.error(e);
+            alert("QRコード取得中にエラーが発生しました。");
+            closeQrModal();
+        }
+    }
+    function closeQrModal() {
+        qrModal.style.display = "none";
+        qrModalImage.src = "";
+    }
+
+    function closeAllMenus() {
+        document.querySelectorAll(".peer-menu-open").forEach(function (el) { el.classList.remove("peer-menu-open"); });
+    }
+
+    document.getElementById("btn-add-peer").addEventListener("click", createPeer);
+    peersTableBody.addEventListener("click", function (e) {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.closest(".peer-menu-btn")) {
+            e.preventDefault();
+            e.stopPropagation();
+            var menu = target.closest(".peer-menu");
+            document.querySelectorAll(".peer-menu-open").forEach(function (el) {
+                if (el !== menu) el.classList.remove("peer-menu-open");
+            });
+            if (menu) menu.classList.toggle("peer-menu-open");
+            return;
+        }
+        if (target.closest(".peer-menu-item")) {
+            closeAllMenus();
+            e.preventDefault();
+            e.stopPropagation();
+            var item = target.closest(".peer-menu-item");
+            var action = item.getAttribute("data-action");
+            var id = item.getAttribute("data-id");
+            var name = item.getAttribute("data-name") || "";
+            if (action === "conf") downloadConf(id);
+            else if (action === "qr") openQrModal(id, name);
+            else if (action === "delete") deletePeer(id);
+            return;
+        }
+        closeAllMenus();
+        var action = target.getAttribute("data-action");
+        var id = target.getAttribute("data-id");
+        if (action === "toggle" && id) {
+            var currentActive = target.getAttribute("data-active") === "1";
+            togglePeer(id, currentActive);
+        }
+    });
+    document.addEventListener("click", function () { closeAllMenus(); });
+    qrModal.addEventListener("click", (e) => {
+        if (e.target === qrModal) closeQrModal();
+    });
+    qrModalClose.addEventListener("click", closeQrModal);
+    btnFetchServerPubkey.addEventListener("click", fetchServerPubkeyFromServer);
+    serverPubkeyInput.addEventListener("change", (e) => setServerPubkey(e.target.value.trim()));
+
+    serverPubkeyInput.value = getServerPubkey();
+    updateServerPubkeyStatus();
+    fetchPeers();
+    fetchPeerStats();
+    setInterval(fetchPeerStats, 5000);
+})();
+</script>
+{% endblock %}

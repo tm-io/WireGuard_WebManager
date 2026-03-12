@@ -1,0 +1,25 @@
+# WireGuard Web Manager - Web アプリ（一般ユーザー実行）
+# Worker のあとに起動すること。config.yaml の host/port で待ち受ける。
+#
+# 配置手順（手元のターミナルで実行）:
+#   sudo cp /home/kanri/wireguard-web-manager/deploy/wg-manager-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wg-manager-web
+#   sudo systemctl status wg-manager-web
+#
+# プロジェクトを別ディレクトリに置いた場合は、WorkingDirectory / ExecStart のパスを編集すること。
+[Unit]
+Description=WireGuard Web Manager (Web UI)
+After=network.target wg-manager-worker.service
+Wants=wg-manager-worker.service
+
+[Service]
+Type=simple
+User=kanri
+WorkingDirectory=/home/kanri/wireguard-web-manager
+ExecStart=/home/kanri/wireguard-web-manager/.venv/bin/python3 -m app.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

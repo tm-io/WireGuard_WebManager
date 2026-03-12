@@ -1,0 +1,20 @@
+app:
+  host: "0.0.0.0"
+  port: 8080
+  auth_username: "admin"
+  auth_password: "password123"
+
+paths:
+  db_path: "data/wg-manager.db"
+  wg_conf_dir: "/etc/wireguard"
+  # Worker 利用（推奨）。空にすると Web アプリから sudo wg を実行（sudoers 要設定）。
+  wg_worker_socket: "/var/run/wg-manager.sock"
+  socket_owner: "kanri"  # ソケットの所有者（Web アプリを動かすユーザー名）
+
+wireguard:
+  interface: "wg0"
+  server_endpoint: "203.0.113.1"
+  listen_port: 51820
+  client_ip_range: "10.8.0.0/24"
+  client_dns: "1.1.1.1, 8.8.8.8"
+  persistent_keepalive: 25
