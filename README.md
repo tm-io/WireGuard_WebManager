@@ -1,11 +1,35 @@
-# WireGuard Web管理アプリケーション
+# WireGuard Web Manager
 
-## 現在のメイン実装（Rust）
+WireGuard 用の **シンプルな Web 管理ツール**です。  
+Linux サーバー上の WireGuard 接続（Peer）の **追加・削除・有効/無効切り替え・設定配布(QR / .conf)** をブラウザから行えます。
 
-メイン実装は **Rust 版**です。
+- WireGuard 本体について: [WireGuard 公式サイト](https://www.wireguard.com/)
 
-- Rust 実装: `rust/`（ビルド・起動: [rust/README.md](rust/README.md)）
-- Python 版: `archive/python/`（アーカイブ）
+## 特徴
+
+- **ブラウザから Peer 管理**
+  - Peer の追加 / 削除 / 有効・無効切り替え
+  - IP 自動採番（`client_ip_range` から空き IP を自動で割り当て）
+  - `wg set` / Worker 経由でダウンタイムなしに反映
+- **設定配布が簡単**
+  - クライアント用 `.conf` のダウンロード（Windows / macOS / Linux）
+  - スマホ向け QR コード生成（WireGuard モバイルアプリでそのまま読み込み）
+- **安全な権限分離**
+  - Web アプリは一般ユーザー、WireGuard 操作は root の Worker が担当
+  - Web から `sudo wg` を叩かずに運用可能（sudoers 設定不要）
+- **運用に寄り添った UI**
+  - ダッシュボードで Peer サマリー・WireGuard バージョン・警告表示
+  - 設定画面から `config.yaml` の主要項目を編集・保存
+  - docs フォルダの Markdown マニュアルを Web UI から閲覧
+- **Rust 製・単一バイナリ配布を想定**
+  - Web: `wg-manager`（axum）
+  - Worker: `wg-worker`（UNIX ソケット経由で `wg` を実行）
+  - RHEL / Ubuntu など複数ディストリでの動作を想定
+
+## プロジェクト構成
+
+- メイン実装（Rust）: `rust/`（ビルド・起動: [rust/README.md](rust/README.md)）
+- Python 版: `archive/python/`（旧実装のアーカイブ）
 
 ## 運用・マニュアル
 
@@ -22,7 +46,7 @@
 
 ---
 
-## 現在の実装状況
+## 主な機能と現状
 
 ### 実装済み
 
@@ -38,7 +62,7 @@
 | **WireGuard バージョン** | ダッシュボードで現在のバージョン表示。最新版と比較し古い場合は警告表示。 |
 | **ログ** | Peer 有効/無効の失敗時などに syslog / journald へエラー出力。 |
 
-### 未実装（WireGuard 関連）
+### 今後の拡張候補（WireGuard 関連）
 
 | 機能 | 説明 |
 |------|------|
@@ -49,7 +73,7 @@
 
 ---
 
-## 開発要件・手順書（参考）
+## 開発者向けメモ
 
 ### 0. Rust 移行の命令（方針）
 本プロジェクトは **Python を Rust で完全にリファクタリング** する。  
