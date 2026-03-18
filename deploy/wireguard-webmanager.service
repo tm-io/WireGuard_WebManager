@@ -21,8 +21,8 @@ SyslogIdentifier=wireguard-webmanager
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-# DB・ソケットへの書き込み許可
-ReadWritePaths=/var/lib/wireguard-webmanager /run/wg-manager.sock /etc/wireguard-webmanager
+# DB・ソケットへの書き込み許可（/run はソケットファイルを含むため親ディレクトリを指定）
+ReadWritePaths=/var/lib/wireguard-webmanager /run /etc/wireguard-webmanager
 
 [Install]
 WantedBy=multi-user.target
