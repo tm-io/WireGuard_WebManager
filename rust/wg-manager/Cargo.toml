@@ -96,8 +96,6 @@ assets = [
     { source = "../../deploy/wireguard-webmanager-worker.service", dest = "/usr/lib/systemd/system/wireguard-webmanager-worker.service", mode = "0644" },
 ]
 
-[package.metadata.generate-rpm.requires]
-
 [package.metadata.generate-rpm.post_install_script]
 # ユーザー作成・ディレクトリ作成・systemd 登録
 script = """
