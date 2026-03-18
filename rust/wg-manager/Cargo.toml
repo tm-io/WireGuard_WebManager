@@ -71,8 +71,8 @@ maintainer-scripts = "debian/"
 systemd-units = { enable = true, start = false }
 # インストールされるファイル: [source, dest, mode]
 assets = [
-    ["../../target/release/wg-manager",  "usr/bin/wg-manager",  "755"],
-    ["../../target/release/wg-worker",   "usr/bin/wg-worker",   "755"],
+    ["../target/release/wg-manager",  "usr/bin/wg-manager",  "755"],
+    ["../target/release/wg-worker",   "usr/bin/wg-worker",   "755"],
     ["../../deploy/wireguard-webmanager.service",        "lib/systemd/system/wireguard-webmanager.service",        "644"],
     ["../../deploy/wireguard-webmanager-worker.service", "lib/systemd/system/wireguard-webmanager-worker.service", "644"],
 ]
@@ -90,8 +90,8 @@ requires = [
     { name = "wireguard-tools" },
 ]
 assets = [
-    { source = "../../target/release/wg-manager",  dest = "/usr/bin/wg-manager",  mode = "0755" },
-    { source = "../../target/release/wg-worker",   dest = "/usr/bin/wg-worker",   mode = "0755" },
+    { source = "../target/release/wg-manager",  dest = "/usr/bin/wg-manager",  mode = "0755" },
+    { source = "../target/release/wg-worker",   dest = "/usr/bin/wg-worker",   mode = "0755" },
     { source = "../../deploy/wireguard-webmanager.service",        dest = "/usr/lib/systemd/system/wireguard-webmanager.service",        mode = "0644" },
     { source = "../../deploy/wireguard-webmanager-worker.service", dest = "/usr/lib/systemd/system/wireguard-webmanager-worker.service", mode = "0644" },
 ]
