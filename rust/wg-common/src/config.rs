@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// Linux デーモンとしてインストールされた場合のデフォルト設定ファイルパス
+pub const DEFAULT_CONFIG_PATH: &str = "/etc/wireguard-webmanager/config.yaml";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub host: String,
@@ -51,9 +54,9 @@ impl Default for AppConfig {
 impl Default for PathsConfig {
     fn default() -> Self {
         Self {
-            db_path: "data/wg-manager.db".to_string(),
+            db_path: "/var/lib/wireguard-webmanager/wg-manager.db".to_string(),
             wg_conf_dir: "/etc/wireguard".to_string(),
-            wg_worker_socket: String::new(),
+            wg_worker_socket: "/run/wg-manager.sock".to_string(),
             socket_owner: "wgwm".to_string(),
         }
     }
@@ -79,10 +82,37 @@ struct ConfigFile {
     wireguard: Option<WireGuardConfig>,
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            app: AppConfig::default(),
+            paths: PathsConfig::default(),
+            wireguard: WireGuardConfig::default(),
+        }
+    }
+}
+
 impl Settings {
-    /// config.yaml を読み込む。パス未指定時はカレントの config.yaml。
+    /// config.yaml を読み込む。パス未指定時は `/etc/wireguard-webmanager/config.yaml`。
+    /// ファイルが存在しない場合はデフォルト設定で自動生成する。
     pub fn load(config_path: Option<&Path>) -> Result<Self, String> {
-        let path = config_path.unwrap_or(Path::new("config.yaml"));
+        let default_path = Path::new(DEFAULT_CONFIG_PATH);
+        let path = config_path.unwrap_or(default_path);
+
+        if !path.exists() {
+            let defaults = Settings::default();
+            // 親ディレクトリを作成してからデフォルト設定を書き出す
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("config dir create: {}", e))?;
+            }
+            let yaml = serde_yaml::to_string(&defaults)
+                .map_err(|e| format!("config serialize: {}", e))?;
+            fs::write(path, yaml).map_err(|e| format!("config write: {}", e))?;
+            eprintln!("config: {} が存在しないためデフォルト設定で自動生成しました", path.display());
+            return Ok(defaults);
+        }
+
         let s = fs::read_to_string(path).map_err(|e| format!("config read: {}", e))?;
         let raw: ConfigFile = serde_yaml::from_str(&s).map_err(|e| format!("config parse: {}", e))?;
         Ok(Settings {
@@ -94,7 +124,7 @@ impl Settings {
 
     /// 現在の設定を YAML として保存（設定画面用）。raw は app/paths/wireguard をマージした全体。
     pub fn save(raw: &impl Serialize, config_path: Option<&Path>) -> Result<(), String> {
-        let path = config_path.unwrap_or(Path::new("config.yaml"));
+        let path = config_path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
         let s = serde_yaml::to_string(raw).map_err(|e| format!("config serialize: {}", e))?;
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);

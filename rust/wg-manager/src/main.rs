@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config_path = std::env::var("CONFIG_PATH")
         .ok()
         .map(|s| Path::new(&s).to_path_buf())
-        .unwrap_or_else(|| Path::new("config.yaml").to_path_buf());
+        .unwrap_or_else(|| Path::new(wg_common::config::DEFAULT_CONFIG_PATH).to_path_buf());
 
     let settings = Settings::load(Some(config_path.as_path()))
         .map_err(|e| format!("config: {}", e))?;
@@ -215,7 +215,9 @@ async fn docs_view_page(
 
 fn docs_dir() -> std::path::PathBuf {
     // config.yaml の場所を基準に docs/ を探す（WorkingDirectory に依存しない）
-    let config_path = std::env::var("CONFIG_PATH").ok().unwrap_or_else(|| "config.yaml".to_string());
+    let config_path = std::env::var("CONFIG_PATH")
+        .ok()
+        .unwrap_or_else(|| wg_common::config::DEFAULT_CONFIG_PATH.to_string());
     let base = base_dir_from_config_path(Path::new(&config_path));
     base.join("docs")
 }
@@ -618,7 +620,9 @@ async fn api_settings_get(State(state): State<Arc<AppState>>, jar: CookieJar) ->
     if !is_logged_in(&jar) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let path = std::env::var("CONFIG_PATH").ok().unwrap_or_else(|| "config.yaml".to_string());
+    let path = std::env::var("CONFIG_PATH")
+        .ok()
+        .unwrap_or_else(|| wg_common::config::DEFAULT_CONFIG_PATH.to_string());
     let raw = std::fs::read_to_string(&path).unwrap_or_default();
     let mut v: serde_json::Value = serde_yaml::from_str::<serde_yaml::Value>(&raw)
         .ok()
@@ -641,7 +645,9 @@ async fn api_settings_put(
     if !is_logged_in(&jar) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let path = std::env::var("CONFIG_PATH").ok().unwrap_or_else(|| "config.yaml".to_string());
+    let path = std::env::var("CONFIG_PATH")
+        .ok()
+        .unwrap_or_else(|| wg_common::config::DEFAULT_CONFIG_PATH.to_string());
     // 空パスワードは「維持」なので、既存を読み込んで埋め戻す
     let existing_raw = std::fs::read_to_string(&path).unwrap_or_default();
     let existing_yaml: serde_yaml::Value = serde_yaml::from_str(&existing_raw).unwrap_or(serde_yaml::Value::Null);

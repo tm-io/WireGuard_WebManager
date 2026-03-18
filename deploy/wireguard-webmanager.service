@@ -1,0 +1,28 @@
+[Unit]
+Description=WireGuard Web Manager - Web UI
+Documentation=https://github.com/tm-io/WireGuard_WebManager
+After=network.target wireguard-webmanager-worker.service
+Wants=wireguard-webmanager-worker.service
+
+[Service]
+Type=simple
+User=wgwm
+Group=wgwm
+Environment=CONFIG_PATH=/etc/wireguard-webmanager/config.yaml
+ExecStart=/usr/bin/wg-manager
+Restart=on-failure
+RestartSec=5
+# ログをジャーナルへ
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wireguard-webmanager
+
+# セキュリティ強化
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# DB・ソケットへの書き込み許可
+ReadWritePaths=/var/lib/wireguard-webmanager /run/wg-manager.sock /etc/wireguard-webmanager
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+
+# wgwm システムユーザーが存在しない場合は作成
+if ! id -u wgwm > /dev/null 2>&1; then
+    adduser --system --no-create-home --group --shell /usr/sbin/nologin wgwm
+fi
+
+# 設定ファイルディレクトリの作成と権限設定
+install -d -m 750 -o root -g wgwm /etc/wireguard-webmanager
+
+# DB 格納ディレクトリの作成と権限設定
+install -d -m 750 -o wgwm -g wgwm /var/lib/wireguard-webmanager
+
+# systemd へのサービス登録
+if command -v systemctl > /dev/null 2>&1; then
+    systemctl daemon-reload
+    systemctl enable wireguard-webmanager-worker.service
+    systemctl enable wireguard-webmanager.service
+    echo "インストール完了。次のコマンドで起動できます:"
+    echo "  sudo systemctl start wireguard-webmanager-worker wireguard-webmanager"
+fi

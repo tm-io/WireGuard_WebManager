@@ -17,17 +17,7 @@ fn load_config() -> Result<Settings, String> {
         .ok()
         .filter(|p| Path::new(p).is_file())
         .map(|p| Path::new(&p).to_path_buf())
-        .or_else(|| {
-            let exe = std::env::current_exe().ok()?;
-            let dir = exe.parent()?;
-            let config = dir.join("config.yaml");
-            if config.is_file() {
-                Some(config)
-            } else {
-                Some(Path::new("config.yaml").to_path_buf())
-            }
-        })
-        .unwrap_or_else(|| Path::new("config.yaml").to_path_buf());
+        .unwrap_or_else(|| Path::new(wg_common::config::DEFAULT_CONFIG_PATH).to_path_buf());
 
     Settings::load(Some(path.as_path()))
 }
