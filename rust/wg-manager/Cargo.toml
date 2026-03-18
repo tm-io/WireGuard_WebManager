@@ -84,9 +84,7 @@ name = "wireguard-webmanager"
 license = "MIT"
 summary = "WireGuard Web Manager - Web UI for managing WireGuard VPN"
 group = "Applications/Internet"
-requires = [
-    { name = "wireguard-tools" },
-]
+requires = ["wireguard-tools"]
 assets = [
     { source = "../target/release/wg-manager",  dest = "/usr/bin/wg-manager",  mode = "0755" },
     { source = "../target/release/wg-worker",   dest = "/usr/bin/wg-worker",   mode = "0755" },
