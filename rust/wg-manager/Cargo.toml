@@ -67,8 +67,6 @@ section = "net"
 priority = "optional"
 # postinst / prerm は debian/ ディレクトリから自動参照される
 maintainer-scripts = "debian/"
-# systemd ユニットを自動で enable する (cargo-deb の systemd 統合)
-systemd-units = { enable = true, start = false }
 # インストールされるファイル: [source, dest, mode]
 assets = [
     ["../target/release/wg-manager",  "usr/bin/wg-manager",  "755"],
