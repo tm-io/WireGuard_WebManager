@@ -109,12 +109,24 @@ impl Settings {
             let yaml = serde_yaml::to_string(&defaults)
                 .map_err(|e| format!("config serialize: {}", e))?;
             fs::write(path, yaml).map_err(|e| format!("config write: {}", e))?;
-            eprintln!("config: {} が存在しないためデフォルト設定で自動生成しました", path.display());
+            eprintln!(
+                "config: {} が見つかりません。デフォルト設定で自動生成しました。\
+                 app.auth_password と wireguard.server_endpoint を必ず変更してください",
+                path.display()
+            );
             return Ok(defaults);
         }
 
-        let s = fs::read_to_string(path).map_err(|e| format!("config read: {}", e))?;
-        let raw: ConfigFile = serde_yaml::from_str(&s).map_err(|e| format!("config parse: {}", e))?;
+        let s = fs::read_to_string(path)
+            .map_err(|e| format!("設定ファイル '{}' の読み込みに失敗しました: {}", path.display(), e))?;
+        let raw: ConfigFile = serde_yaml::from_str(&s).map_err(|e| {
+            format!(
+                "設定ファイル '{}' の解析に失敗しました: {}\n\
+                 YAML の構文を確認してください (インデント・コロン・クォートなど)",
+                path.display(),
+                e
+            )
+        })?;
         Ok(Settings {
             app: raw.app.unwrap_or_default(),
             paths: raw.paths.unwrap_or_default(),

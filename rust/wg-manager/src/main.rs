@@ -41,8 +41,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(|s| Path::new(&s).to_path_buf())
         .unwrap_or_else(|| Path::new(wg_common::config::DEFAULT_CONFIG_PATH).to_path_buf());
 
-    let settings = Settings::load(Some(config_path.as_path()))
-        .map_err(|e| format!("config: {}", e))?;
+    let settings = Settings::load(Some(config_path.as_path())).map_err(|e| {
+        let msg = format!(
+            "設定ファイル '{}' の読み込みに失敗しました: {}",
+            config_path.display(),
+            e
+        );
+        tracing::error!("{}", msg);
+        tracing::error!(
+            "config.yaml の YAML 構文・権限・パスを確認してください \
+             (journalctl -u wireguard-webmanager で詳細を確認)"
+        );
+        msg
+    })?;
 
     let base_dir = base_dir_from_config_path(&config_path);
     let db_path = resolve_pathbuf_under_base(&base_dir, Path::new(&settings.paths.db_path));
@@ -79,8 +90,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_state(state);
 
     let addr = format!("{}:{}", settings.app.host, settings.app.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            let msg = format!(
+                "ポート {} はすでに使用中です。config.yaml の app.port を変更するか、\
+                 競合するプロセスを停止してください (lsof -i :{} で確認可能)",
+                settings.app.port, settings.app.port
+            );
+            tracing::error!("{}", msg);
+            msg
+        } else {
+            let msg = format!("アドレス {} へのバインドに失敗しました: {}", addr, e);
+            tracing::error!("{}", msg);
+            msg
+        }
+    })?;
+    tracing::info!(
+        "wg-manager v{} 起動完了 - {} でリクエストを待機中",
+        env!("CARGO_PKG_VERSION"),
+        addr
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -287,7 +316,14 @@ async fn api_server_public_key(State(state): State<Arc<AppState>>, jar: CookieJa
     let pubkey = if !settings.paths.wg_worker_socket.trim().is_empty() {
         match wg_client::get_server_public_key(&settings) {
             Ok(k) => Ok(k),
-            Err(_e) => wg_local::sudo_wg(&["show", &settings.wireguard.interface, "public-key"]),
+            Err(e) => {
+                tracing::warn!(
+                    "Worker ソケット ({}) への接続に失敗しました: {}。sudo wg にフォールバックします",
+                    settings.paths.wg_worker_socket,
+                    e
+                );
+                wg_local::sudo_wg(&["show", &settings.wireguard.interface, "public-key"])
+            }
         }
     } else {
         wg_local::sudo_wg(&["show", &settings.wireguard.interface, "public-key"])

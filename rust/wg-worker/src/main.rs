@@ -19,31 +19,67 @@ fn load_config() -> Result<Settings, String> {
         .map(|p| Path::new(&p).to_path_buf())
         .unwrap_or_else(|| Path::new(wg_common::config::DEFAULT_CONFIG_PATH).to_path_buf());
 
+    tracing::debug!("設定ファイルを読み込みます: {}", path.display());
     Settings::load(Some(path.as_path()))
 }
 
-fn run_wg(args: &[&str]) -> Result<(String, String, i32), ()> {
-    let out = Command::new("wg").args(args).output().map_err(|_| ())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Ok((stdout, stderr, out.status.code().unwrap_or(-1)))
+/// `wg` コマンドを実行し (stdout, stderr, exit_code) を返す。
+/// wg が見つからない・起動失敗の場合は Err(診断メッセージ) を返す。
+fn run_wg(args: &[&str]) -> Result<(String, String, i32), String> {
+    Command::new("wg")
+        .args(args)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "wg コマンドが見つかりません。wireguard-tools がインストールされているか確認してください \
+                 (apt install wireguard-tools  /  dnf install wireguard-tools)"
+                    .to_string()
+            } else {
+                format!("wg コマンドの起動に失敗しました: {e}")
+            }
+        })
+        .map(|out| {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            (stdout, stderr, out.status.code().unwrap_or(-1))
+        })
 }
 
 fn handle_get_public_key(interface: &str) -> Value {
     match run_wg(&["show", interface, "public-key"]) {
-        Ok((out, err, 0)) => serde_json::json!({ "ok": true, "public_key": out }),
-        Ok((_, err, code)) => serde_json::json!({ "ok": false, "error": if err.trim().is_empty() { format!("exit {}", code) } else { err } }),
-        Err(()) => serde_json::json!({ "ok": false, "error": "wg command failed" }),
+        Ok((out, _err, 0)) => serde_json::json!({ "ok": true, "public_key": out }),
+        Ok((_, err, code)) => {
+            let msg = if err.trim().is_empty() {
+                format!("wg show {interface} public-key: exit {code}")
+            } else {
+                err
+            };
+            tracing::error!("get_public_key 失敗 (interface={}): {}", interface, msg);
+            serde_json::json!({ "ok": false, "error": msg })
+        }
+        Err(e) => {
+            tracing::error!("get_public_key 実行エラー: {}", e);
+            serde_json::json!({ "ok": false, "error": e })
+        }
     }
 }
 
 fn handle_get_peer_stats(interface: &str) -> Value {
     let (out, err, code) = match run_wg(&["show", interface, "dump"]) {
         Ok(x) => x,
-        Err(()) => return serde_json::json!({ "ok": false, "error": "wg command failed" }),
+        Err(e) => {
+            tracing::error!("get_peer_stats 実行エラー: {}", e);
+            return serde_json::json!({ "ok": false, "error": e });
+        }
     };
     if code != 0 {
-        return serde_json::json!({ "ok": false, "error": if err.trim().is_empty() { format!("exit {}", code) } else { err } });
+        let msg = if err.trim().is_empty() {
+            format!("wg show {interface} dump: exit {code}")
+        } else {
+            err
+        };
+        tracing::error!("get_peer_stats 失敗 (interface={}): {}", interface, msg);
+        return serde_json::json!({ "ok": false, "error": msg });
     }
     let lines: Vec<&str> = out.lines().collect();
     if lines.is_empty() {
@@ -70,7 +106,12 @@ fn handle_get_peer_stats(interface: &str) -> Value {
     serde_json::json!({ "ok": true, "peers": peers })
 }
 
-fn handle_peer_set(interface: &str, public_key: &str, allowed_ips: &[String], preshared_key: Option<&str>) -> Value {
+fn handle_peer_set(
+    interface: &str,
+    public_key: &str,
+    allowed_ips: &[String],
+    preshared_key: Option<&str>,
+) -> Value {
     if public_key.is_empty() || allowed_ips.is_empty() {
         return serde_json::json!({ "ok": false, "error": "public_key and allowed_ips required" });
     }
@@ -86,13 +127,19 @@ fn handle_peer_set(interface: &str, public_key: &str, allowed_ips: &[String], pr
     if let Some(psk) = preshared_key {
         let mut tmp = match tempfile::NamedTempFile::new() {
             Ok(t) => t,
-            Err(_) => return serde_json::json!({ "ok": false, "error": "preshared-key temp file failed" }),
+            Err(e) => {
+                tracing::error!("PSK 用一時ファイルの作成に失敗しました: {}", e);
+                return serde_json::json!({ "ok": false, "error": format!("preshared-key temp file failed: {e}") });
+            }
         };
         use std::io::Write;
         let _ = tmp.write_all(psk.as_bytes());
         let (_, path_buf) = match tmp.keep() {
             Ok(p) => p,
-            Err(_) => return serde_json::json!({ "ok": false, "error": "preshared-key temp file keep failed" }),
+            Err(e) => {
+                tracing::error!("PSK 用一時ファイルの保持に失敗しました: {}", e);
+                return serde_json::json!({ "ok": false, "error": format!("preshared-key temp file keep failed: {e}") });
+            }
         };
         args.push("preshared-key".into());
         args.push(path_buf.to_string_lossy().into_owned());
@@ -103,10 +150,25 @@ fn handle_peer_set(interface: &str, public_key: &str, allowed_ips: &[String], pr
     if let Some(p) = psk_path.as_ref() {
         let _ = std::fs::remove_file(p);
     }
+    let peer_short = &public_key[..8.min(public_key.len())];
     match result {
-        Ok((_, _, 0)) => serde_json::json!({ "ok": true }),
-        Ok((_, err, code)) => serde_json::json!({ "ok": false, "error": if err.trim().is_empty() { format!("exit {}", code) } else { err } }),
-        Err(()) => serde_json::json!({ "ok": false, "error": "wg command failed" }),
+        Ok((_, _, 0)) => {
+            tracing::info!("peer_set 成功: peer={}... interface={}", peer_short, interface);
+            serde_json::json!({ "ok": true })
+        }
+        Ok((_, err, code)) => {
+            let msg = if err.trim().is_empty() {
+                format!("wg set peer: exit {code}")
+            } else {
+                err
+            };
+            tracing::error!("peer_set 失敗 (peer={}... interface={}): {}", peer_short, interface, msg);
+            serde_json::json!({ "ok": false, "error": msg })
+        }
+        Err(e) => {
+            tracing::error!("peer_set 実行エラー: {}", e);
+            serde_json::json!({ "ok": false, "error": e })
+        }
     }
 }
 
@@ -114,21 +176,38 @@ fn handle_peer_remove(interface: &str, public_key: &str) -> Value {
     if public_key.is_empty() {
         return serde_json::json!({ "ok": false, "error": "public_key required" });
     }
+    let peer_short = &public_key[..8.min(public_key.len())];
     match run_wg(&["set", interface, "peer", public_key, "remove"]) {
-        Ok((_, _, 0)) => serde_json::json!({ "ok": true }),
-        Ok((_, err, code)) => serde_json::json!({ "ok": false, "error": if err.trim().is_empty() { format!("exit {}", code) } else { err } }),
-        Err(()) => serde_json::json!({ "ok": false, "error": "wg command failed" }),
+        Ok((_, _, 0)) => {
+            tracing::info!("peer_remove 成功: peer={}... interface={}", peer_short, interface);
+            serde_json::json!({ "ok": true })
+        }
+        Ok((_, err, code)) => {
+            let msg = if err.trim().is_empty() {
+                format!("wg set peer remove: exit {code}")
+            } else {
+                err
+            };
+            tracing::error!("peer_remove 失敗 (peer={}... interface={}): {}", peer_short, interface, msg);
+            serde_json::json!({ "ok": false, "error": msg })
+        }
+        Err(e) => {
+            tracing::error!("peer_remove 実行エラー: {}", e);
+            serde_json::json!({ "ok": false, "error": e })
+        }
     }
 }
 
 fn handle_request(interface: &str, req: &Value) -> Value {
     let cmd = req.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+    tracing::debug!("リクエスト受信: cmd={}", cmd);
     match cmd {
         "get_public_key" => handle_get_public_key(interface),
         "get_peer_stats" => handle_get_peer_stats(interface),
         "peer_set" => {
             let pk = req.get("public_key").and_then(|v| v.as_str()).unwrap_or("");
-            let allowed_ips: Vec<String> = req.get("allowed_ips")
+            let allowed_ips: Vec<String> = req
+                .get("allowed_ips")
                 .and_then(|v| v.as_array())
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                 .unwrap_or_default();
@@ -139,23 +218,42 @@ fn handle_request(interface: &str, req: &Value) -> Value {
             let pk = req.get("public_key").and_then(|v| v.as_str()).unwrap_or("");
             handle_peer_remove(interface, pk)
         }
-        _ => serde_json::json!({ "ok": false, "error": format!("unknown cmd: {}", cmd) }),
+        _ => {
+            tracing::warn!("不明なコマンドを受信しました: '{}'", cmd);
+            serde_json::json!({ "ok": false, "error": format!("unknown cmd: {}", cmd) })
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
+        .init();
+
     #[cfg(unix)]
     {
         if nix::unistd::geteuid().as_raw() != 0 {
-            eprintln!("wg-worker must be run as root.");
+            tracing::error!(
+                "wg-worker は root 権限で起動する必要があります。\
+                 systemd unit の User=root を確認してください"
+            );
             std::process::exit(1);
         }
     }
 
     let settings = load_config().map_err(|e| {
-        eprintln!("config: {}", e);
+        tracing::error!("設定ファイルの読み込みに失敗しました: {}", e);
+        tracing::error!(
+            "CONFIG_PATH 環境変数、または {} が正しいか確認してください \
+             (journalctl -u wireguard-webmanager-worker で詳細を確認)",
+            wg_common::config::DEFAULT_CONFIG_PATH
+        );
         e
     })?;
+
     let socket_path = settings.paths.wg_worker_socket.trim();
     let socket_path = if socket_path.is_empty() {
         "/var/run/wg-manager.sock"
@@ -168,41 +266,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let socket_path = std::path::Path::new(socket_path);
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            let msg = format!(
+                "ソケットディレクトリ '{}' の作成に失敗しました: {}",
+                parent.display(),
+                e
+            );
+            tracing::error!("{}", msg);
+            msg
+        })?;
     }
     if socket_path.exists() {
-        std::fs::remove_file(socket_path)?;
+        std::fs::remove_file(socket_path).map_err(|e| {
+            let msg = format!(
+                "古いソケットファイル '{}' の削除に失敗しました: {}",
+                socket_path.display(),
+                e
+            );
+            tracing::error!("{}", msg);
+            msg
+        })?;
     }
 
-    let listener = std::os::unix::net::UnixListener::bind(socket_path)?;
+    let listener = std::os::unix::net::UnixListener::bind(socket_path).map_err(|e| {
+        let msg = format!(
+            "UNIX ソケット '{}' のバインドに失敗しました: {}",
+            socket_path.display(),
+            e
+        );
+        tracing::error!("{}", msg);
+        msg
+    })?;
+
     #[cfg(unix)]
     {
-        // Python 版と同じ: chmod 660, chown を socket_owner に設定（存在しない場合はスキップ）
+        // chmod 660, chown を socket_owner に設定
         let meta = std::fs::metadata(socket_path)?;
         let mut perms = meta.permissions();
         perms.set_mode(0o660);
         std::fs::set_permissions(socket_path, perms)?;
 
-        match User::from_name(socket_owner).map_err(|e| format!("lookup user: {e}"))? {
+        match User::from_name(socket_owner).map_err(|e| format!("ユーザー検索エラー: {e}"))? {
             Some(u) => {
                 let uid = Uid::from_raw(u.uid.as_raw());
                 let gid = Gid::from_raw(u.gid.as_raw());
                 if let Err(e) = chown(socket_path, Some(uid), Some(gid)) {
-                    eprintln!("wg-worker: chown({socket_owner}) failed: {e}");
+                    tracing::warn!(
+                        "chown({}) 失敗: {} - ソケットのオーナー変更をスキップします",
+                        socket_owner,
+                        e
+                    );
                 }
             }
             None => {
-                eprintln!("wg-worker: user {socket_owner:?} not found; socket ownership not changed.");
+                tracing::warn!(
+                    "ユーザー '{}' が見つかりません。ソケットのオーナーは変更されません。\
+                     wg-manager が接続できない場合は useradd -r {} で作成してください",
+                    socket_owner,
+                    socket_owner
+                );
             }
         }
     }
 
-    eprintln!("Listening on {} (interface={})", socket_path.display(), interface);
+    tracing::info!(
+        "wg-worker v{} 起動完了: socket={} interface={}",
+        env!("CARGO_PKG_VERSION"),
+        socket_path.display(),
+        interface
+    );
 
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!("接続受付エラー: {}", e);
+                continue;
+            }
         };
         let mut buf = Vec::new();
         let mut one = [0u8; 1];
@@ -214,9 +354,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let line = String::from_utf8_lossy(&buf).trim().to_string();
         let response = if line.is_empty() {
+            tracing::debug!("空リクエストを受信しました");
             serde_json::json!({ "ok": false, "error": "empty request" })
         } else {
-            let req: Value = serde_json::from_str(&line).unwrap_or(serde_json::json!({ "cmd": "" }));
+            let req: Value = serde_json::from_str(&line).unwrap_or_else(|e| {
+                tracing::warn!("JSON パースエラー: {}", e);
+                serde_json::json!({ "cmd": "" })
+            });
             handle_request(interface, &req)
         };
         let out = serde_json::to_string(&response).unwrap_or_default() + "\n";
