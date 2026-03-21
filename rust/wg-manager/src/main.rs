@@ -70,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/server/public-key", get(api_server_public_key))
         .route("/server/peer-stats", get(api_server_peer_stats))
         .route("/server/wg-version", get(api_server_wg_version))
+        .route("/server/wg-update", post(api_server_wg_update))
         .route("/peers/", get(api_peers_list).post(api_peers_create))
         .route("/peers/:id", axum::routing::delete(api_peers_delete).put(api_peers_update))
         .route("/peers/:id/conf/download", get(api_peers_conf_download))
@@ -374,6 +375,29 @@ async fn api_server_peer_stats(State(state): State<Arc<AppState>>, jar: CookieJa
         }));
     }
     Json(json!({ "peers": result })).into_response()
+}
+
+async fn api_server_wg_update(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let settings = state.settings.read().await.clone();
+    match tokio::task::spawn_blocking(move || wg_client::update_wireguard(&settings)).await {
+        Ok(Ok(output)) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("タスクエラー: {}", e) })),
+        )
+            .into_response(),
+    }
 }
 
 async fn api_server_wg_version(jar: CookieJar) -> impl IntoResponse {

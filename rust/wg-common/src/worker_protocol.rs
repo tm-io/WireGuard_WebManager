@@ -16,6 +16,7 @@ pub enum WorkerRequest {
     PeerRemove {
         public_key: String,
     },
+    UpdateWireGuard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,8 @@ pub struct WorkerResponse {
     pub peers: Option<Vec<PeerStat>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

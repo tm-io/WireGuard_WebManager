@@ -198,6 +198,33 @@ fn handle_peer_remove(interface: &str, public_key: &str) -> Value {
     }
 }
 
+fn handle_update_wireguard() -> Value {
+    tracing::info!("wireguard-tools のアップデートを開始します");
+    let update_out = Command::new("apt-get")
+        .args(["-qq", "update"])
+        .output();
+    if let Err(e) = update_out {
+        return serde_json::json!({ "ok": false, "error": format!("apt-get update 実行失敗: {}", e) });
+    }
+    match Command::new("apt-get").args(["install", "-y", "wireguard-tools"]).output() {
+        Ok(out) if out.status.success() => {
+            let output = String::from_utf8_lossy(&out.stdout).to_string();
+            tracing::info!("wireguard-tools のアップデートが完了しました");
+            serde_json::json!({ "ok": true, "output": output })
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let code = out.status.code().unwrap_or(-1);
+            tracing::error!("wireguard-tools アップデート失敗: exit={} stderr={}", code, stderr);
+            serde_json::json!({ "ok": false, "error": format!("apt-get install 失敗 (exit {}): {}", code, stderr) })
+        }
+        Err(e) => {
+            tracing::error!("apt-get install 実行失敗: {}", e);
+            serde_json::json!({ "ok": false, "error": format!("apt-get install 実行失敗: {}", e) })
+        }
+    }
+}
+
 fn handle_request(interface: &str, req: &Value) -> Value {
     let cmd = req.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
     tracing::debug!("リクエスト受信: cmd={}", cmd);
@@ -218,6 +245,7 @@ fn handle_request(interface: &str, req: &Value) -> Value {
             let pk = req.get("public_key").and_then(|v| v.as_str()).unwrap_or("");
             handle_peer_remove(interface, pk)
         }
+        "update_wireguard" => handle_update_wireguard(),
         _ => {
             tracing::warn!("不明なコマンドを受信しました: '{}'", cmd);
             serde_json::json!({ "ok": false, "error": format!("unknown cmd: {}", cmd) })

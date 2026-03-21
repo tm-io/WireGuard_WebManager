@@ -4,6 +4,39 @@
 {% block extra_css %}
 <style>
     .wg-outdated { color: #fbbf24; margin-left: 4px; }
+    .wg-update-banner {
+        margin-top: 1.2rem;
+        padding: 0.75rem 1rem;
+        background: #1e293b;
+        border: 1px solid #fbbf24;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+    .wg-update-banner .update-msg { flex: 1; font-size: 0.9rem; color: #fbbf24; }
+    .wg-update-banner .btn-update {
+        padding: 0.35rem 0.9rem;
+        background: #fbbf24;
+        color: #0f172a;
+        border: none;
+        border-radius: 4px;
+        font-weight: bold;
+        cursor: pointer;
+        font-size: 0.85rem;
+        white-space: nowrap;
+    }
+    .wg-update-banner .btn-update:disabled { opacity: 0.6; cursor: not-allowed; }
+    .wg-update-result {
+        margin-top: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border-radius: 4px;
+        font-size: 0.82rem;
+        display: none;
+    }
+    .wg-update-result.ok { background: #14532d; color: #86efac; }
+    .wg-update-result.err { background: #450a0a; color: #fca5a5; }
 </style>
 {% endblock %}
 
@@ -20,6 +53,11 @@
                 <span id="card-wg-outdated" class="wg-outdated" title="更新を推奨" aria-hidden="true" style="display:none;"> ⚠</span>
             </span>
         </div>
+        <div id="wg-update-banner" class="wg-update-banner" style="display:none;">
+            <span class="update-msg" id="wg-update-msg"></span>
+            <button class="btn-update" id="btn-wg-update" onclick="doWgUpdate()">アップデート</button>
+        </div>
+        <div id="wg-update-result" class="wg-update-result"></div>
     </div>
     <div class="card">
         <div class="card-title">Peer サマリー</div>
@@ -73,18 +111,54 @@
     function updateWgVersion(data) {
         var el = document.getElementById("card-wg-version");
         var elWarn = document.getElementById("card-wg-outdated");
+        var elBanner = document.getElementById("wg-update-banner");
+        var elMsg = document.getElementById("wg-update-msg");
         if (!el) return;
         if (data && data.current) {
             el.textContent = "v" + data.current;
             if (data.outdated && data.latest) {
                 el.title = "最新: v" + data.latest;
                 if (elWarn) { elWarn.style.display = "inline"; elWarn.title = "更新を推奨（最新: v" + data.latest + "）"; }
+                if (elBanner) { elBanner.style.display = "flex"; }
+                if (elMsg) { elMsg.textContent = "v" + data.latest + " が利用可能です（現在: v" + data.current + "）"; }
             } else {
                 if (elWarn) elWarn.style.display = "none";
+                if (elBanner) elBanner.style.display = "none";
             }
         } else {
             el.textContent = "取得できません";
             if (elWarn) elWarn.style.display = "none";
+            if (elBanner) elBanner.style.display = "none";
+        }
+    }
+    async function doWgUpdate() {
+        var btn = document.getElementById("btn-wg-update");
+        var elResult = document.getElementById("wg-update-result");
+        if (btn) { btn.disabled = true; btn.textContent = "更新中…"; }
+        if (elResult) { elResult.style.display = "none"; elResult.className = "wg-update-result"; }
+        try {
+            var res = await fetch("/api/server/wg-update", { method: "POST" });
+            var data = await res.json();
+            if (elResult) {
+                elResult.style.display = "block";
+                if (data.ok) {
+                    elResult.className = "wg-update-result ok";
+                    elResult.textContent = "アップデートが完了しました。";
+                    // バージョン表示を再取得
+                    setTimeout(fetchWgVersion, 1000);
+                } else {
+                    elResult.className = "wg-update-result err";
+                    elResult.textContent = "エラー: " + (data.error || "不明なエラー");
+                }
+            }
+        } catch (e) {
+            if (elResult) {
+                elResult.style.display = "block";
+                elResult.className = "wg-update-result err";
+                elResult.textContent = "通信エラー: " + e.message;
+            }
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "アップデート"; }
         }
     }
     async function fetchWgVersion() {

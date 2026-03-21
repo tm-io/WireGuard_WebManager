@@ -63,6 +63,35 @@ pub fn peer_set(
     Ok(())
 }
 
+pub fn update_wireguard(settings: &Settings) -> Result<String, String> {
+    let path = settings.paths.wg_worker_socket.trim();
+    if path.is_empty() {
+        return Err("wg_worker_socket が設定されていません".to_string());
+    }
+    let mut stream = UnixStream::connect(path).map_err(|e| format!("Worker 接続失敗: {}", e))?;
+    // apt-get は時間がかかるため長めのタイムアウトを設定
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(120))).ok();
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).ok();
+    stream.write_all(br#"{"cmd":"update_wireguard"}"#).map_err(|e| e.to_string())?;
+    stream.write_all(b"\n").map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    let mut one = [0u8; 1];
+    while stream.read(&mut one).map_err(|e| e.to_string())? == 1 {
+        buf.push(one[0]);
+        if one[0] == b'\n' {
+            break;
+        }
+    }
+    let line = String::from_utf8_lossy(&buf);
+    let resp: serde_json::Value =
+        serde_json::from_str(line.trim()).map_err(|e| format!("Worker 応答パース: {}", e))?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        return Err(err);
+    }
+    Ok(resp.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string())
+}
+
 pub fn peer_remove(settings: &Settings, public_key: &str) -> Result<(), String> {
     let payload = serde_json::to_vec(&serde_json::json!({
         "cmd": "peer_remove",
