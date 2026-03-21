@@ -8,6 +8,13 @@ pub struct Database {
 }
 
 #[derive(Debug, Clone)]
+pub struct TrafficSnapshot {
+    pub recorded_at: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct Peer {
     pub id: i64,
     pub name: String,
@@ -20,6 +27,10 @@ pub struct Peer {
 }
 
 impl Database {
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -45,7 +56,16 @@ impl Database {
                 allocated_ip TEXT NOT NULL UNIQUE,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
-            )
+            );
+            CREATE TABLE IF NOT EXISTS peer_traffic_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+                recorded_at TEXT NOT NULL,
+                rx_bytes INTEGER NOT NULL DEFAULT 0,
+                tx_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_traffic_log_peer_time
+                ON peer_traffic_log(peer_id, recorded_at);
             "#,
         ).map_err(|e| e.to_string())?;
         Ok(())
@@ -159,6 +179,60 @@ impl Database {
         let conn = self.conn()?;
         conn.execute("DELETE FROM peers WHERE id = ?", params![peer_id])
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn update_peer_name(&self, peer_id: i64, name: &str) -> Result<(), String> {
+        let conn = self.conn()?;
+        conn.execute("UPDATE peers SET name = ? WHERE id = ?", params![name, peer_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn record_traffic_snapshot(&self, peer_id: i64, rx_bytes: u64, tx_bytes: u64) -> Result<(), String> {
+        let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO peer_traffic_log (peer_id, recorded_at, rx_bytes, tx_bytes) VALUES (?, ?, ?, ?)",
+            params![peer_id, recorded_at, rx_bytes as i64, tx_bytes as i64],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_traffic_history(&self, peer_id: i64, limit: i64) -> Result<Vec<TrafficSnapshot>, String> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT recorded_at, rx_bytes, tx_bytes FROM peer_traffic_log
+             WHERE peer_id = ? ORDER BY recorded_at DESC LIMIT ?",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![peer_id, limit], |row| {
+            Ok(TrafficSnapshot {
+                recorded_at: row.get(0)?,
+                rx_bytes: row.get::<_, i64>(1)? as u64,
+                tx_bytes: row.get::<_, i64>(2)? as u64,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        // DESC で取得したので reverse して時系列順に
+        out.reverse();
+        Ok(out)
+    }
+
+    /// ピアごとに最新 keep_per_peer 件を残してそれ以前を削除（SQLite 3.25+ のウィンドウ関数を使用）
+    pub fn prune_traffic_log(&self, keep_per_peer: i64) -> Result<(), String> {
+        let conn = self.conn()?;
+        conn.execute(
+            "DELETE FROM peer_traffic_log WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id, row_number() OVER (PARTITION BY peer_id ORDER BY recorded_at DESC) AS rn
+                    FROM peer_traffic_log
+                ) WHERE rn <= ?
+            )",
+            params![keep_per_peer],
+        ).map_err(|e| e.to_string())?;
         Ok(())
     }
 }

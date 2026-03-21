@@ -17,6 +17,16 @@
     .settings-msg { margin-top: 12px; font-size: 0.8rem; }
     .settings-msg.success { color: var(--accent); }
     .settings-msg.error { color: #f97373; }
+    .backup-section { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .backup-section h2 { font-size: 0.9rem; margin: 0 0 12px; color: var(--text-muted); font-weight: 600; }
+    .backup-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .btn-backup { padding: 8px 18px; border-radius: 999px; border: 1px solid rgba(148,163,184,0.4); background: rgba(15,23,42,0.8); color: var(--text); font-size: 0.82rem; cursor: pointer; }
+    .btn-backup:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-restore { padding: 8px 18px; border-radius: 999px; border: 1px solid rgba(251,191,36,0.5); background: rgba(251,191,36,0.08); color: #fbbf24; font-size: 0.82rem; cursor: pointer; }
+    .btn-restore:hover { background: rgba(251,191,36,0.18); }
+    .backup-msg { margin-top: 10px; font-size: 0.8rem; }
+    .backup-msg.success { color: var(--accent); }
+    .backup-msg.error { color: #f97373; }
 </style>
 {% endblock %}
 
@@ -99,6 +109,18 @@
         </div>
         <div id="settings-msg" class="settings-msg" role="status" aria-live="polite"></div>
     </form>
+
+    <div class="backup-section">
+        <h2>バックアップ / リストア</h2>
+        <div class="backup-actions">
+            <button type="button" class="btn-backup" id="btn-backup-download">DBをダウンロード</button>
+            <label class="btn-restore" style="display:inline-block;cursor:pointer;">
+                DBをリストア
+                <input type="file" id="restore-file-input" accept=".db" style="display:none;">
+            </label>
+        </div>
+        <div id="backup-msg" class="backup-msg" role="status" aria-live="polite"></div>
+    </div>
 </div>
 {% endblock %}
 
@@ -199,6 +221,43 @@
     });
 
     load();
+
+    // バックアップ/リストア
+    const backupMsg = document.getElementById("backup-msg");
+    function setBackupMsg(text, isError) {
+        backupMsg.textContent = text;
+        backupMsg.className = "backup-msg " + (isError ? "error" : "success");
+    }
+
+    document.getElementById("btn-backup-download").addEventListener("click", function () {
+        window.open("/api/backup/db", "_blank");
+    });
+
+    document.getElementById("restore-file-input").addEventListener("change", async function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!window.confirm(`「${file.name}」で現在のDBを上書きします。よろしいですか？\n（現在のDBは .bak として自動バックアップされます）`)) {
+            e.target.value = "";
+            return;
+        }
+        setBackupMsg("アップロード中…", false);
+        try {
+            const res = await fetch("/api/backup/restore", {
+                method: "POST",
+                headers: {"Content-Type": "application/octet-stream"},
+                body: file,
+            });
+            const data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+                setBackupMsg(data.message || data.detail || "リストアに失敗しました。", true);
+            } else {
+                setBackupMsg(data.message || "リストアが完了しました。", false);
+            }
+        } catch (err) {
+            setBackupMsg("通信エラー: " + err.message, true);
+        }
+        e.target.value = "";
+    });
 })();
 </script>
 {% endblock %}

@@ -75,7 +75,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/peers/:id", axum::routing::delete(api_peers_delete).put(api_peers_update))
         .route("/peers/:id/conf/download", get(api_peers_conf_download))
         .route("/peers/:id/qr", get(api_peers_qr))
+        .route("/peers/:id/traffic", get(api_peers_traffic))
         .route("/settings", get(api_settings_get).put(api_settings_put))
+        .route("/backup/db", get(api_backup_download))
+        .route("/backup/restore", post(api_backup_restore))
         .with_state(state.clone());
 
     let app = Router::new()
@@ -88,7 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/manual", get(docs_list_page))
         .route("/manual/view/:name", get(docs_view_page))
         .nest("/api", api)
-        .with_state(state);
+        .with_state(state.clone());
+
+    // トラフィック記録バックグラウンドタスク（5分ごと）
+    tokio::spawn(traffic_recording_task(state));
 
     let addr = format!("{}:{}", settings.app.host, settings.app.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
@@ -357,6 +363,10 @@ async fn api_server_peer_stats(State(state): State<Arc<AppState>>, jar: CookieJa
         Ok(p) => p,
         Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e).into_response(),
     };
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let mut by_pub = std::collections::HashMap::new();
     for p in wg_peers {
         by_pub.insert(p.public_key.clone(), p);
@@ -364,7 +374,11 @@ async fn api_server_peer_stats(State(state): State<Arc<AppState>>, jar: CookieJa
     let mut result = Vec::new();
     for peer in db_peers {
         let s = by_pub.get(&peer.public_key);
-        let connected = s.and_then(|x| x.latest_handshake).is_some();
+        // 直近 180 秒以内にハンドシェイクがあれば接続中と判定
+        let connected = s
+            .and_then(|x| x.latest_handshake)
+            .map(|ts| now_secs.saturating_sub(ts) < 180)
+            .unwrap_or(false);
         result.push(json!({
             "id": peer.id,
             "public_key": peer.public_key,
@@ -531,7 +545,8 @@ async fn api_peers_create(
 
 #[derive(serde::Deserialize)]
 struct UpdatePeerReq {
-    is_active: bool,
+    is_active: Option<bool>,
+    name: Option<String>,
 }
 
 async fn api_peers_update(
@@ -543,48 +558,62 @@ async fn api_peers_update(
     if !is_logged_in(&jar) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let settings = state.settings.read().await.clone();
-    let peer = match state.db.get_peer(id) {
-        Ok(Some(p)) => p,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    };
-    if peer.is_active != req.is_active {
-        let allowed = vec![format!("{}/32", peer.allocated_ip)];
-        let r = if req.is_active {
-            // enable -> wg set peer allowed-ips (+ psk if any)
-            if !settings.paths.wg_worker_socket.trim().is_empty() {
-                wg_client::peer_set(&settings, &peer.public_key, &allowed, peer.pre_shared_key.as_deref())
-            } else {
-                wg_local::sudo_wg_set_peer(
-                    &settings.wireguard.interface,
-                    &peer.public_key,
-                    &allowed.join(","),
-                    peer.pre_shared_key.as_deref(),
-                )
-            }
-        } else {
-            // disable -> remove from wg
-            if !settings.paths.wg_worker_socket.trim().is_empty() {
-                wg_client::peer_remove(&settings, &peer.public_key)
-            } else {
-                wg_local::sudo_wg(&[
-                    "set",
-                    &settings.wireguard.interface,
-                    "peer",
-                    &peer.public_key,
-                    "remove",
-                ])
-                .map(|_| ())
-            }
-        };
-        if let Err(e) = r {
-            return (StatusCode::SERVICE_UNAVAILABLE, e).into_response();
+
+    // 名前変更
+    if let Some(ref name) = req.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return (StatusCode::BAD_REQUEST, "名前は空にできません").into_response();
         }
-        if let Err(e) = state.db.set_peer_active(id, req.is_active) {
+        if let Err(e) = state.db.update_peer_name(id, name) {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     }
+
+    // 有効/無効切り替え
+    if let Some(next_active) = req.is_active {
+        let settings = state.settings.read().await.clone();
+        let peer = match state.db.get_peer(id) {
+            Ok(Some(p)) => p,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        };
+        if peer.is_active != next_active {
+            let allowed = vec![format!("{}/32", peer.allocated_ip)];
+            let r = if next_active {
+                if !settings.paths.wg_worker_socket.trim().is_empty() {
+                    wg_client::peer_set(&settings, &peer.public_key, &allowed, peer.pre_shared_key.as_deref())
+                } else {
+                    wg_local::sudo_wg_set_peer(
+                        &settings.wireguard.interface,
+                        &peer.public_key,
+                        &allowed.join(","),
+                        peer.pre_shared_key.as_deref(),
+                    )
+                }
+            } else {
+                if !settings.paths.wg_worker_socket.trim().is_empty() {
+                    wg_client::peer_remove(&settings, &peer.public_key)
+                } else {
+                    wg_local::sudo_wg(&[
+                        "set",
+                        &settings.wireguard.interface,
+                        "peer",
+                        &peer.public_key,
+                        "remove",
+                    ])
+                    .map(|_| ())
+                }
+            };
+            if let Err(e) = r {
+                return (StatusCode::SERVICE_UNAVAILABLE, e).into_response();
+            }
+            if let Err(e) = state.db.set_peer_active(id, next_active) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            }
+        }
+    }
+
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -817,6 +846,146 @@ fn parse_dump(interface: &str, dump: &str) -> Result<Vec<wg_common::PeerStat>, S
     }
     let _ = interface; // 現状未使用（将来のログ用途）
     Ok(peers)
+}
+
+async fn api_peers_traffic(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let limit = q.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(48);
+    match state.db.get_traffic_history(id, limit.min(500)) {
+        Ok(history) => {
+            let out: Vec<_> = history.iter().map(|s| json!({
+                "recorded_at": s.recorded_at,
+                "rx_bytes": s.rx_bytes,
+                "tx_bytes": s.tx_bytes,
+            })).collect();
+            Json(json!({ "history": out })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn api_backup_download(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let db_path = state.db.path().to_path_buf();
+    match tokio::fs::read(&db_path).await {
+        Ok(bytes) => {
+            let filename = db_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("wg-manager.db")
+                .to_string();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            headers.insert(
+                axum::http::header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)).unwrap(),
+            );
+            (headers, Bytes::from(bytes)).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn api_backup_restore(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "ファイルが空です").into_response();
+    }
+    // SQLite ファイルのマジックバイトを検証
+    if body.len() < 16 || &body[..16] != b"SQLite format 3\0" {
+        return (StatusCode::BAD_REQUEST, "SQLite ファイルではありません").into_response();
+    }
+    let db_path = state.db.path().to_path_buf();
+    // 一時ファイルに書き込んで rusqlite で整合性チェック
+    let tmp_path = db_path.with_extension("restore_tmp");
+    if let Err(e) = tokio::fs::write(&tmp_path, &body).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("一時ファイル書き込み失敗: {}", e)).into_response();
+    }
+    let integrity_ok = tokio::task::spawn_blocking({
+        let tmp = tmp_path.clone();
+        move || -> bool {
+            let Ok(conn) = rusqlite::Connection::open(&tmp) else { return false; };
+            conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .map(|r| r == "ok")
+                .unwrap_or(false)
+        }
+    }).await.unwrap_or(false);
+
+    if !integrity_ok {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return (StatusCode::BAD_REQUEST, "DB ファイルの整合性チェックに失敗しました").into_response();
+    }
+    // 既存 DB をバックアップしてから置換
+    let bak_path = db_path.with_extension("db.bak");
+    let _ = tokio::fs::copy(&db_path, &bak_path).await;
+    if let Err(e) = tokio::fs::rename(&tmp_path, &db_path).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("DB 置換失敗: {}", e)).into_response();
+    }
+    Json(json!({ "ok": true, "message": "リストアが完了しました。ページを再読み込みしてください。" })).into_response()
+}
+
+async fn traffic_recording_task(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let settings = state.settings.read().await.clone();
+        let wg_peers = tokio::task::spawn_blocking({
+            let settings = settings.clone();
+            move || -> Result<Vec<wg_common::PeerStat>, String> {
+                if !settings.paths.wg_worker_socket.trim().is_empty() {
+                    wg_client::get_peer_stats(&settings)
+                } else {
+                    let dump = wg_local::sudo_wg_dump(&settings.wireguard.interface)?;
+                    parse_dump(&settings.wireguard.interface, &dump)
+                }
+            }
+        }).await;
+        let wg_peers = match wg_peers {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => { tracing::warn!("トラフィック記録: wg 取得失敗: {}", e); continue; }
+            Err(e) => { tracing::warn!("トラフィック記録: タスクエラー: {}", e); continue; }
+        };
+        let db_peers = match state.db.list_peers() {
+            Ok(p) => p,
+            Err(e) => { tracing::warn!("トラフィック記録: DB 取得失敗: {}", e); continue; }
+        };
+        let mut by_pub = std::collections::HashMap::new();
+        for p in wg_peers {
+            by_pub.insert(p.public_key.clone(), p);
+        }
+        for peer in db_peers {
+            if let Some(s) = by_pub.get(&peer.public_key) {
+                if s.rx_bytes > 0 || s.tx_bytes > 0 {
+                    if let Err(e) = state.db.record_traffic_snapshot(peer.id, s.rx_bytes, s.tx_bytes) {
+                        tracing::warn!("トラフィック記録: peer {} 保存失敗: {}", peer.id, e);
+                    }
+                }
+            }
+        }
+        // ピアごとに最新 200 件を保持
+        if let Err(e) = state.db.prune_traffic_log(200) {
+            tracing::warn!("トラフィック記録: prune 失敗: {}", e);
+        }
+    }
 }
 
 fn extract_semverish(raw: &str) -> Option<&str> {

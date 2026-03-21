@@ -28,6 +28,22 @@
     }
     .peer-menu-item:hover { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
     .peer-actions-cell { width: 52px; }
+    .conn-dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        margin-left: 6px;
+        vertical-align: middle;
+        background: #475569;
+        transition: background 0.3s;
+    }
+    .conn-dot.online { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
+    .conn-dot.offline { background: #475569; }
+    /* トラフィック履歴モーダル */
+    .traffic-modal-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 12px; }
+    .traffic-modal-table th { color: var(--text-muted); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+    .traffic-modal-table td { padding: 4px 8px; border-bottom: 1px solid rgba(148,163,184,0.1); }
+    .traffic-modal-table tr:last-child td { border-bottom: none; }
 </style>
 {% endblock %}
 
@@ -97,6 +113,15 @@
         <button id="qr-modal-close">閉じる</button>
     </div>
 </div>
+<div class="modal-backdrop" id="traffic-modal" style="display:none;">
+    <div class="modal" style="min-width:360px;max-width:560px;max-height:80vh;overflow-y:auto;">
+        <h2>トラフィック履歴</h2>
+        <p id="traffic-modal-title" style="color:var(--text-muted);font-size:0.85rem;margin:0 0 4px;"></p>
+        <small style="color:var(--text-muted);font-size:0.72rem;">5分ごとの累積値（受信/送信）</small>
+        <div id="traffic-modal-body"></div>
+        <button id="traffic-modal-close" style="margin-top:16px;">閉じる</button>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -160,6 +185,7 @@
                     <button class="badge-status ${p.is_active ? "" : "off"}" data-action="toggle" data-id="${p.id}" data-active="${p.is_active ? "1" : "0"}">
                         ${p.is_active ? "有効" : "無効"}
                     </button>
+                    <span class="conn-dot offline" data-peer-conn="${p.id}" title="接続状態取得中"></span>
                 </td>
                 <td><span class="peer-last" data-peer-last="${p.id}">-</span></td>
                 <td><span class="peer-traffic" data-peer-traffic="${p.id}">-</span></td>
@@ -167,6 +193,8 @@
                     <div class="peer-menu">
                         <button type="button" class="peer-menu-btn" aria-label="操作メニュー" title="操作">⋯</button>
                         <div class="peer-menu-dropdown" role="menu">
+                            <button type="button" class="peer-menu-item" role="menuitem" data-action="rename" data-id="${p.id}" data-name="${p.name}">名前変更</button>
+                            <button type="button" class="peer-menu-item" role="menuitem" data-action="history" data-id="${p.id}" data-name="${p.name}">トラフィック履歴</button>
                             <button type="button" class="peer-menu-item" role="menuitem" data-action="conf" data-id="${p.id}">.conf ダウンロード</button>
                             <button type="button" class="peer-menu-item" role="menuitem" data-action="qr" data-id="${p.id}" data-name="${p.name}">QRコード</button>
                             <button type="button" class="peer-menu-item" role="menuitem" data-action="delete" data-id="${p.id}">削除</button>
@@ -203,8 +231,14 @@
             for (const s of data.peers) {
                 const lastEl = document.querySelector(`[data-peer-last="${s.id}"]`);
                 const trafEl = document.querySelector(`[data-peer-traffic="${s.id}"]`);
+                const connEl = document.querySelector(`[data-peer-conn="${s.id}"]`);
                 if (lastEl) lastEl.textContent = formatHandshake(s.latest_handshake);
                 if (trafEl) trafEl.textContent = `↑ ${formatBytes(s.rx_bytes)} / ↓ ${formatBytes(s.tx_bytes)}`;
+                if (connEl) {
+                    connEl.classList.toggle("online", !!s.connected);
+                    connEl.classList.toggle("offline", !s.connected);
+                    connEl.title = s.connected ? "接続中" : (s.latest_handshake ? "切断" : "未接続");
+                }
             }
         } catch (e) { console.error(e); }
     }
@@ -247,6 +281,56 @@
         }
         await fetchPeers();
         await fetchPeerStats();
+    }
+
+    async function renamePeer(id, currentName) {
+        const newName = window.prompt("新しい名前を入力してください:", currentName);
+        if (!newName || newName.trim() === currentName) return;
+        const res = await fetch(`/api/peers/${id}`, {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({name: newName.trim()}),
+        });
+        if (!res.ok) {
+            alert("名前の変更に失敗しました: " + (await res.text()));
+            return;
+        }
+        await fetchPeers();
+        await fetchPeerStats();
+    }
+
+    async function openTrafficHistory(id, name) {
+        const modal = $("traffic-modal");
+        const titleEl = $("traffic-modal-title");
+        const bodyEl = $("traffic-modal-body");
+        if (!modal) return;
+        titleEl.textContent = `トラフィック履歴: ${name}`;
+        bodyEl.innerHTML = "<p style='color:var(--text-muted);font-size:0.8rem;'>読み込み中...</p>";
+        modal.style.display = "flex";
+        try {
+            const res = await fetch(`/api/peers/${id}/traffic?limit=48`);
+            if (!res.ok) { bodyEl.innerHTML = "<p style='color:#f97373;'>取得失敗</p>"; return; }
+            const data = await res.json();
+            const history = data.history || [];
+            if (!history.length) {
+                bodyEl.innerHTML = "<p style='color:var(--text-muted);font-size:0.8rem;'>まだデータがありません（5分ごとに記録されます）</p>";
+                return;
+            }
+            let rows = history.map(function(h) {
+                const d = new Date(h.recorded_at);
+                return `<tr>
+                    <td>${d.toLocaleString()}</td>
+                    <td>${formatBytes(h.rx_bytes)}</td>
+                    <td>${formatBytes(h.tx_bytes)}</td>
+                </tr>`;
+            }).join("");
+            bodyEl.innerHTML = `<table class="traffic-modal-table">
+                <thead><tr><th>記録日時</th><th>受信 (↑)</th><th>送信 (↓)</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        } catch (e) {
+            bodyEl.innerHTML = "<p style='color:#f97373;'>エラーが発生しました</p>";
+        }
     }
 
     async function fetchServerPubkeyFromServer() {
@@ -335,7 +419,9 @@
             var action = item.getAttribute("data-action");
             var id = item.getAttribute("data-id");
             var name = item.getAttribute("data-name") || "";
-            if (action === "conf") downloadConf(id);
+            if (action === "rename") renamePeer(id, name);
+            else if (action === "history") openTrafficHistory(id, name);
+            else if (action === "conf") downloadConf(id);
             else if (action === "qr") openQrModal(id, name);
             else if (action === "delete") deletePeer(id);
             return;
@@ -353,6 +439,16 @@
         if (e.target === qrModal) closeQrModal();
     });
     qrModalClose.addEventListener("click", closeQrModal);
+    const trafficModal = $("traffic-modal");
+    const trafficModalClose = $("traffic-modal-close");
+    if (trafficModal) {
+        trafficModal.addEventListener("click", (e) => {
+            if (e.target === trafficModal) trafficModal.style.display = "none";
+        });
+    }
+    if (trafficModalClose) {
+        trafficModalClose.addEventListener("click", () => { trafficModal.style.display = "none"; });
+    }
     btnFetchServerPubkey.addEventListener("click", fetchServerPubkeyFromServer);
     serverPubkeyInput.addEventListener("change", (e) => setServerPubkey(e.target.value.trim()));
 
