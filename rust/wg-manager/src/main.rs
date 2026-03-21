@@ -841,14 +841,21 @@ fn parse_ver_tuple(v: &str) -> (u32, u32, u32) {
 }
 
 fn fetch_latest_wg_version() -> Result<Option<String>, String> {
-    let url = "https://api.github.com/repos/WireGuard/wireguard-tools/releases/latest";
+    // wireguard-tools は GitHub Releases を使わずタグのみで管理しているため Tags API を使用
+    let url = "https://api.github.com/repos/WireGuard/wireguard-tools/tags?per_page=1";
     let resp = ureq::get(url)
         .set("Accept", "application/vnd.github.v3+json")
         .set("User-Agent", "wg-manager")
         .call()
         .map_err(|e| e.to_string())?;
     let v: serde_json::Value = resp.into_json().map_err(|e: std::io::Error| e.to_string())?;
-    let mut tag = v.get("tag_name").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let mut tag = v
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|t| t.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string();
     if tag.starts_with('v') {
         tag = tag.trim_start_matches('v').to_string();
     }
