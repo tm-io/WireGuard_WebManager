@@ -1,7 +1,5 @@
 # WireGuard Web Manager - 特権 Worker（Rust 版・root 実行）
 #
-# 環境依存（パス）を unit に埋め込まないため、EnvironmentFile から読み込む。
-#
 # 使い方:
 #   sudo cp deploy/wg-manager-worker.service /etc/systemd/system/
 #   sudo cp deploy/wg-manager.env.example /etc/wg-manager/wg-manager.env
@@ -16,8 +14,7 @@ After=network.target
 Type=simple
 User=root
 EnvironmentFile=-/etc/wg-manager/wg-manager.env
-Environment=CONFIG_PATH=${WGWM_CONFIG_PATH}
-ExecStart=${WGWM_WG_WORKER_BIN}
+ExecStart=/usr/local/bin/wg-worker
 Restart=on-failure
 RestartSec=5
 
