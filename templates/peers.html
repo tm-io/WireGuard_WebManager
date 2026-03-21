@@ -204,7 +204,7 @@
                 const lastEl = document.querySelector(`[data-peer-last="${s.id}"]`);
                 const trafEl = document.querySelector(`[data-peer-traffic="${s.id}"]`);
                 if (lastEl) lastEl.textContent = formatHandshake(s.latest_handshake);
-                if (trafEl) trafEl.textContent = `${formatBytes(s.rx_bytes)} / ${formatBytes(s.tx_bytes)}`;
+                if (trafEl) trafEl.textContent = `↑ ${formatBytes(s.rx_bytes)} / ↓ ${formatBytes(s.tx_bytes)}`;
             }
         } catch (e) { console.error(e); }
     }

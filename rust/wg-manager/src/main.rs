@@ -795,10 +795,12 @@ fn parse_dump(interface: &str, dump: &str) -> Result<Vec<wg_common::PeerStat>, S
 }
 
 fn extract_semverish(raw: &str) -> Option<&str> {
-    // "wireguard-tools v1.0.20210914" or "1.0.20210914"
+    // "wireguard-tools v1.0.20210914 - https://..." or "1.0.20210914"
     let s = raw.trim();
     let s = s.strip_prefix("wireguard-tools ").unwrap_or(s);
     let s = s.strip_prefix('v').unwrap_or(s);
+    // スペース以降（URL等）を除去してバージョン番号部分のみ取り出す
+    let s = s.split_whitespace().next().unwrap_or(s);
     if s.split('.').take(3).all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) {
         Some(s)
     } else {
