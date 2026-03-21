@@ -15,6 +15,33 @@ pub fn get_wg_version() -> Option<String> {
     }
 }
 
+/// apt-cache policy wireguard-tools の出力から (installed, candidate) を返す。
+/// どちらも取得できない場合は None。
+pub fn get_apt_wg_versions() -> Option<(String, String)> {
+    let out = Command::new("apt-cache")
+        .args(["policy", "wireguard-tools"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut installed = None;
+    let mut candidate = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("Installed:") {
+            let v = v.trim();
+            if v != "(none)" {
+                installed = Some(v.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("Candidate:") {
+            let v = v.trim();
+            if v != "(none)" {
+                candidate = Some(v.to_string());
+            }
+        }
+    }
+    Some((installed?, candidate?))
+}
+
 pub fn sudo_wg_dump(interface: &str) -> Result<String, String> {
     sudo_wg(&["show", interface, "dump"])
 }

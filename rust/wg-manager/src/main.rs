@@ -409,10 +409,11 @@ async fn api_server_wg_version(jar: CookieJar) -> impl IntoResponse {
         .as_deref()
         .and_then(extract_semverish)
         .map(|s| s.to_string());
-    let latest = fetch_latest_wg_version().ok().flatten();
-    let outdated = match (current.as_deref(), latest.as_deref()) {
-        (Some(c), Some(l)) => parse_ver_tuple(c) < parse_ver_tuple(l),
-        _ => false,
+    // apt のインストール済み・候補バージョンで比較（GitHub タグとの乖離を避けるため）
+    let apt = wg_local::get_apt_wg_versions();
+    let (outdated, latest) = match &apt {
+        Some((installed, candidate)) => (installed != candidate, Some(candidate.clone())),
+        None => (false, None),
     };
     Json(json!({
         "current": current,
@@ -832,32 +833,4 @@ fn extract_semverish(raw: &str) -> Option<&str> {
     }
 }
 
-fn parse_ver_tuple(v: &str) -> (u32, u32, u32) {
-    let mut it = v.split('.');
-    let a = it.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let b = it.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let c = it.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    (a, b, c)
-}
 
-fn fetch_latest_wg_version() -> Result<Option<String>, String> {
-    // wireguard-tools は GitHub Releases を使わずタグのみで管理しているため Tags API を使用
-    let url = "https://api.github.com/repos/WireGuard/wireguard-tools/tags?per_page=1";
-    let resp = ureq::get(url)
-        .set("Accept", "application/vnd.github.v3+json")
-        .set("User-Agent", "wg-manager")
-        .call()
-        .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = resp.into_json().map_err(|e: std::io::Error| e.to_string())?;
-    let mut tag = v
-        .as_array()
-        .and_then(|a| a.first())
-        .and_then(|t| t.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .to_string();
-    if tag.starts_with('v') {
-        tag = tag.trim_start_matches('v').to_string();
-    }
-    if tag.is_empty() { Ok(None) } else { Ok(Some(tag)) }
-}
