@@ -32,3 +32,6 @@ rust/target/
 # OS
 .DS_Store
 Thumbs.db
+
+# 作業記録（ローカル管理）
+PROGRESS.md
