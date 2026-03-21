@@ -55,7 +55,7 @@
         </div>
         <div id="wg-update-banner" class="wg-update-banner" style="display:none;">
             <span class="update-msg" id="wg-update-msg"></span>
-            <button class="btn-update" id="btn-wg-update" onclick="doWgUpdate()">アップデート</button>
+            <button class="btn-update" id="btn-wg-update">アップデート</button>
         </div>
         <div id="wg-update-result" class="wg-update-result"></div>
     </div>
@@ -180,6 +180,8 @@
     fetchServerStatus();
     fetchWgVersion();
     fetchPeersForSummary();
+    var btnUpdate = document.getElementById("btn-wg-update");
+    if (btnUpdate) btnUpdate.addEventListener("click", doWgUpdate);
 })();
 </script>
 {% endblock %}
