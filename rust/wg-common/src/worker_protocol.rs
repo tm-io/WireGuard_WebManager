@@ -2,6 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// ACL ルール（wg-manager → wg-worker 間で受け渡す）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AclRule {
+    pub action: String,      // "allow" | "deny"
+    pub target_cidr: String,
+    pub protocol: String,    // "any" | "tcp" | "udp" | "icmp"
+    pub port_range: String,  // "" | "80" | "80-443"（tcp/udp のみ有効）
+    pub priority: i64,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum WorkerRequest {
@@ -17,6 +28,22 @@ pub enum WorkerRequest {
         public_key: String,
     },
     UpdateWireGuard,
+    /// ピアの ACL を nftables に適用する。rules が空なら当該ピアのルールを削除。
+    ApplyAclRules {
+        peer_ip: String,
+        rules: Vec<AclRule>,
+    },
+    /// 全ピアの ACL を一括再適用（起動時リストア用）
+    ReloadAllAcl {
+        peers: Vec<PeerAclEntry>,
+    },
+}
+
+/// ReloadAllAcl で渡すピアごとのエントリ
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerAclEntry {
+    pub peer_ip: String,
+    pub rules: Vec<AclRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

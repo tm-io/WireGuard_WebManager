@@ -76,6 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/peers/:id/conf/download", get(api_peers_conf_download))
         .route("/peers/:id/qr", get(api_peers_qr))
         .route("/peers/:id/traffic", get(api_peers_traffic))
+        .route("/peers/:id/acl", get(api_acl_list).post(api_acl_create))
+        .route("/peers/:id/acl/:rule_id", axum::routing::delete(api_acl_delete))
         .route("/settings", get(api_settings_get).put(api_settings_put))
         .route("/backup/db", get(api_backup_download))
         .route("/backup/restore", post(api_backup_restore))
@@ -87,6 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/logout", get(logout))
         .route("/dashboard", get(dashboard_page))
         .route("/peers", get(peers_page))
+        .route("/acl", get(acl_page))
         .route("/settings", get(settings_page))
         .route("/manual", get(docs_list_page))
         .route("/manual/view/:name", get(docs_view_page))
@@ -94,7 +97,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_state(state.clone());
 
     // トラフィック記録バックグラウンドタスク（5分ごと）
-    tokio::spawn(traffic_recording_task(state));
+    tokio::spawn(traffic_recording_task(state.clone()));
+
+    // 起動時に全 ACL を nftables へリストア
+    {
+        let s = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let settings = tokio::runtime::Handle::current()
+                .block_on(s.settings.read())
+                .clone();
+            if settings.paths.wg_worker_socket.trim().is_empty() {
+                return;
+            }
+            let peers = match s.db.list_peers() {
+                Ok(p) => p,
+                Err(e) => { tracing::warn!("ACL リストア: ピア一覧取得失敗: {}", e); return; }
+            };
+            let mut entries = Vec::new();
+            for peer in &peers {
+                let rules = match s.db.list_acl_rules(peer.id) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                if rules.is_empty() { continue; }
+                entries.push(wg_common::worker_protocol::PeerAclEntry {
+                    peer_ip: peer.allocated_ip.clone(),
+                    rules: rules.into_iter().map(|r| wg_common::worker_protocol::AclRule {
+                        action: r.action,
+                        target_cidr: r.target_cidr,
+                        protocol: r.protocol,
+                        port_range: r.port_range,
+                        priority: r.priority,
+                        description: r.description,
+                    }).collect(),
+                });
+            }
+            if !entries.is_empty() {
+                if let Err(e) = wg_client::reload_all_acl(&settings, &entries) {
+                    tracing::warn!("起動時 ACL リストア失敗: {}", e);
+                } else {
+                    tracing::info!("起動時 ACL リストア完了 ({} ピア)", entries.len());
+                }
+            }
+        });
+    }
 
     let addr = format!("{}:{}", settings.app.host, settings.app.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
@@ -186,6 +232,16 @@ fn is_logged_in(jar: &CookieJar) -> bool {
 async fn logout(jar: CookieJar) -> impl IntoResponse {
     let jar = jar.remove(Cookie::from("wgwm_session"));
     (jar, axum::response::Redirect::to("/login"))
+}
+
+async fn acl_page(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return axum::response::Redirect::to("/login").into_response();
+    }
+    match templates::render_acl(&state.templates) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
 }
 
 async fn peers_page(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
@@ -869,6 +925,163 @@ async fn api_peers_traffic(
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
+}
+
+// ---- ACL API ----
+
+async fn api_acl_list(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.db.list_acl_rules(id) {
+        Ok(rules) => {
+            let out: Vec<_> = rules.iter().map(|r| json!({
+                "id": r.id,
+                "peer_id": r.peer_id,
+                "action": r.action,
+                "target_cidr": r.target_cidr,
+                "protocol": r.protocol,
+                "port_range": r.port_range,
+                "description": r.description,
+                "priority": r.priority,
+                "created_at": r.created_at,
+            })).collect();
+            Json(json!({ "rules": out })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CreateAclRuleReq {
+    action: String,
+    target_cidr: String,
+    #[serde(default = "default_protocol")]
+    protocol: String,
+    #[serde(default)]
+    port_range: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_priority")]
+    priority: i64,
+}
+fn default_priority() -> i64 { 100 }
+fn default_protocol() -> String { "any".to_string() }
+
+async fn api_acl_create(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    axum::extract::Path(peer_id): axum::extract::Path<i64>,
+    Json(req): Json<CreateAclRuleReq>,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // バリデーション
+    if req.action != "allow" && req.action != "deny" {
+        return (StatusCode::BAD_REQUEST, "action は 'allow' または 'deny' のみ有効です").into_response();
+    }
+    if req.target_cidr.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "target_cidr は必須です").into_response();
+    }
+    // 簡易 CIDR バリデーション
+    if req.target_cidr.parse::<ipnet::IpNet>().is_err()
+        && req.target_cidr.parse::<std::net::IpAddr>().is_err()
+    {
+        return (StatusCode::BAD_REQUEST, "target_cidr が不正な IP/CIDR 形式です").into_response();
+    }
+    // protocol バリデーション
+    if !matches!(req.protocol.as_str(), "any" | "tcp" | "udp" | "icmp") {
+        return (StatusCode::BAD_REQUEST, "protocol は 'any' / 'tcp' / 'udp' / 'icmp' のみ有効です").into_response();
+    }
+    // port_range バリデーション（tcp/udp のみ有効）
+    if !req.port_range.trim().is_empty() && !matches!(req.protocol.as_str(), "tcp" | "udp") {
+        return (StatusCode::BAD_REQUEST, "port_range は tcp / udp のみ指定可能です").into_response();
+    }
+
+    let peer = match state.db.get_peer(peer_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+
+    // DB に保存
+    let rule = match state.db.create_acl_rule(
+        peer_id, &req.action, &req.target_cidr, &req.protocol, &req.port_range, &req.description, req.priority,
+    ) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+
+    // nftables に即時適用
+    let settings = state.settings.read().await.clone();
+    if !settings.paths.wg_worker_socket.trim().is_empty() {
+        let all_rules = state.db.list_acl_rules(peer_id).unwrap_or_default();
+        let wg_rules: Vec<_> = all_rules.iter().map(|r| wg_common::worker_protocol::AclRule {
+            action: r.action.clone(),
+            target_cidr: r.target_cidr.clone(),
+            protocol: r.protocol.clone(),
+            port_range: r.port_range.clone(),
+            priority: r.priority,
+            description: r.description.clone(),
+        }).collect();
+        if let Err(e) = wg_client::apply_acl_rules(&settings, &peer.allocated_ip, &wg_rules) {
+            tracing::warn!("ACL 適用失敗 (peer_id={}): {}", peer_id, e);
+        }
+    }
+
+    Json(json!({
+        "id": rule.id,
+        "peer_id": rule.peer_id,
+        "action": rule.action,
+        "target_cidr": rule.target_cidr,
+        "protocol": rule.protocol,
+        "port_range": rule.port_range,
+        "description": rule.description,
+        "priority": rule.priority,
+        "created_at": rule.created_at,
+    })).into_response()
+}
+
+async fn api_acl_delete(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    axum::extract::Path((peer_id, rule_id)): axum::extract::Path<(i64, i64)>,
+) -> impl IntoResponse {
+    if !is_logged_in(&jar) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let peer = match state.db.get_peer(peer_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if let Err(e) = state.db.delete_acl_rule(rule_id) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+
+    // 削除後のルールを nftables に再適用
+    let settings = state.settings.read().await.clone();
+    if !settings.paths.wg_worker_socket.trim().is_empty() {
+        let all_rules = state.db.list_acl_rules(peer_id).unwrap_or_default();
+        let wg_rules: Vec<_> = all_rules.iter().map(|r| wg_common::worker_protocol::AclRule {
+            action: r.action.clone(),
+            target_cidr: r.target_cidr.clone(),
+            protocol: r.protocol.clone(),
+            port_range: r.port_range.clone(),
+            priority: r.priority,
+            description: r.description.clone(),
+        }).collect();
+        if let Err(e) = wg_client::apply_acl_rules(&settings, &peer.allocated_ip, &wg_rules) {
+            tracing::warn!("ACL 再適用失敗 (peer_id={}): {}", peer_id, e);
+        }
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn api_backup_download(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {

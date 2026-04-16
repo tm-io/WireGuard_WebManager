@@ -8,6 +8,19 @@ pub struct Database {
 }
 
 #[derive(Debug, Clone)]
+pub struct AclRule {
+    pub id: i64,
+    pub peer_id: i64,
+    pub action: String,      // "allow" | "deny"
+    pub target_cidr: String,
+    pub protocol: String,    // "any" | "tcp" | "udp" | "icmp"
+    pub port_range: String,  // "" | "80" | "80-443"（tcp/udp のみ有効）
+    pub description: String,
+    pub priority: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct TrafficSnapshot {
     pub recorded_at: String,
     pub rx_bytes: u64,
@@ -66,8 +79,27 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_traffic_log_peer_time
                 ON peer_traffic_log(peer_id, recorded_at);
+            CREATE TABLE IF NOT EXISTS peer_acl_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+                action TEXT NOT NULL CHECK(action IN ('allow', 'deny')),
+                target_cidr TEXT NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'any',
+                port_range TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                priority INTEGER NOT NULL DEFAULT 100,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_acl_peer
+                ON peer_acl_rules(peer_id, priority);
             "#,
         ).map_err(|e| e.to_string())?;
+
+        // 既存DBへのマイグレーション: protocol / port_range カラムを追加（なければ）
+        let conn = self.conn()?;
+        let _ = conn.execute("ALTER TABLE peer_acl_rules ADD COLUMN protocol TEXT NOT NULL DEFAULT 'any'", []);
+        let _ = conn.execute("ALTER TABLE peer_acl_rules ADD COLUMN port_range TEXT NOT NULL DEFAULT ''", []);
+
         Ok(())
     }
 
@@ -219,6 +251,110 @@ impl Database {
         // DESC で取得したので reverse して時系列順に
         out.reverse();
         Ok(out)
+    }
+
+    // ---- ACL ----
+
+    pub fn list_acl_rules(&self, peer_id: i64) -> Result<Vec<AclRule>, String> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, peer_id, action, target_cidr, protocol, port_range, description, priority, created_at
+             FROM peer_acl_rules WHERE peer_id = ? ORDER BY priority ASC, id ASC",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![peer_id], |row| {
+            Ok(AclRule {
+                id: row.get(0)?,
+                peer_id: row.get(1)?,
+                action: row.get(2)?,
+                target_cidr: row.get(3)?,
+                protocol: row.get(4)?,
+                port_range: row.get(5)?,
+                description: row.get(6)?,
+                priority: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_all_acl_rules(&self) -> Result<Vec<AclRule>, String> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, peer_id, action, target_cidr, protocol, port_range, description, priority, created_at
+             FROM peer_acl_rules ORDER BY peer_id ASC, priority ASC, id ASC",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AclRule {
+                id: row.get(0)?,
+                peer_id: row.get(1)?,
+                action: row.get(2)?,
+                target_cidr: row.get(3)?,
+                protocol: row.get(4)?,
+                port_range: row.get(5)?,
+                description: row.get(6)?,
+                priority: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    pub fn create_acl_rule(
+        &self,
+        peer_id: i64,
+        action: &str,
+        target_cidr: &str,
+        protocol: &str,
+        port_range: &str,
+        description: &str,
+        priority: i64,
+    ) -> Result<AclRule, String> {
+        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO peer_acl_rules (peer_id, action, target_cidr, protocol, port_range, description, priority, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![peer_id, action, target_cidr, protocol, port_range, description, priority, created_at],
+        ).map_err(|e| e.to_string())?;
+        let id = conn.last_insert_rowid();
+        let mut stmt = conn.prepare(
+            "SELECT id, peer_id, action, target_cidr, protocol, port_range, description, priority, created_at
+             FROM peer_acl_rules WHERE id = ?",
+        ).map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![id]).map_err(|e| e.to_string())?;
+        rows.next().map_err(|e| e.to_string())?
+            .map(|row| Ok(AclRule {
+                id: row.get(0).map_err(|e: rusqlite::Error| e.to_string())?,
+                peer_id: row.get(1).map_err(|e: rusqlite::Error| e.to_string())?,
+                action: row.get(2).map_err(|e: rusqlite::Error| e.to_string())?,
+                target_cidr: row.get(3).map_err(|e: rusqlite::Error| e.to_string())?,
+                protocol: row.get(4).map_err(|e: rusqlite::Error| e.to_string())?,
+                port_range: row.get(5).map_err(|e: rusqlite::Error| e.to_string())?,
+                description: row.get(6).map_err(|e: rusqlite::Error| e.to_string())?,
+                priority: row.get(7).map_err(|e: rusqlite::Error| e.to_string())?,
+                created_at: row.get(8).map_err(|e: rusqlite::Error| e.to_string())?,
+            }))
+            .unwrap_or(Err("inserted rule not found".to_string()))
+    }
+
+    pub fn delete_acl_rule(&self, rule_id: i64) -> Result<(), String> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM peer_acl_rules WHERE id = ?", params![rule_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// ピアごとの全 ACL ルールを返す（nftables 適用用）
+    pub fn get_peer_acl_rules_for_apply(&self, peer_id: i64) -> Result<Vec<AclRule>, String> {
+        self.list_acl_rules(peer_id)
     }
 
     /// ピアごとに最新 keep_per_peer 件を残してそれ以前を削除（SQLite 3.25+ のウィンドウ関数を使用）

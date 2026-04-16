@@ -1,0 +1,439 @@
+{% extends "base.html" %}
+{% block title %}アクセス制御 - WireGuard Web Manager{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">アクセス制御</h1>
+    <p class="page-subtitle">ピアごとに許可・拒否するIPアドレス/CIDRを設定します。ルールは nftables で管理され、サービス再起動後も自動で復元されます。</p>
+</div>
+
+<div class="acl-layout">
+    <!-- ピア一覧 -->
+    <div class="acl-peer-list card" id="peerList">
+        <div class="card-header">ピア一覧</div>
+        <div id="peerItems" class="peer-items">
+            <div class="loading-text">読み込み中...</div>
+        </div>
+    </div>
+
+    <!-- ルール編集エリア -->
+    <div class="acl-rules-area">
+        <div class="card" id="rulesCard" style="display:none;">
+            <div class="card-header">
+                <span id="selectedPeerName">-</span> のACLルール
+                <span class="peer-ip-badge" id="selectedPeerIp"></span>
+            </div>
+
+            <!-- ルール追加フォーム -->
+            <div class="add-rule-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>アクション</label>
+                        <div class="action-toggle">
+                            <button type="button" class="action-btn active" id="actionAllow" data-action="allow">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>
+                                許可
+                            </button>
+                            <button type="button" class="action-btn" id="actionDeny" data-action="deny">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                拒否
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group flex-2">
+                        <label>IPアドレス / CIDR</label>
+                        <input type="text" id="targetCidr" placeholder="例: 192.168.1.0/24  または  10.0.0.5" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                        <label>プロトコル</label>
+                        <select id="ruleProtocol" class="form-input proto-select" onchange="onProtocolChange()">
+                            <option value="any">any</option>
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                            <option value="icmp">ICMP</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="portRangeGroup" style="display:none;">
+                        <label>ポート</label>
+                        <input type="text" id="rulePortRange" placeholder="例: 80 または 80-443" class="form-input port-input" />
+                    </div>
+                    <div class="form-group flex-2">
+                        <label>説明（任意）</label>
+                        <input type="text" id="ruleDesc" placeholder="例: 社内サーバー" class="form-input" />
+                    </div>
+                    <div class="form-group">
+                        <label>優先度</label>
+                        <input type="number" id="rulePriority" value="100" min="1" max="999" class="form-input priority-input" />
+                    </div>
+                    <div class="form-group form-group-btn">
+                        <label>&nbsp;</label>
+                        <button type="button" class="btn btn-primary" id="addRuleBtn">追加</button>
+                    </div>
+                </div>
+                <div class="priority-hint">優先度: 数値が小さいほど先に評価されます（1が最優先）</div>
+                <div id="addRuleError" class="error-msg" style="display:none;"></div>
+            </div>
+
+            <!-- ルール一覧 -->
+            <div id="rulesList" class="rules-list">
+                <div class="loading-text">ルールを読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- ピア未選択時 -->
+        <div class="empty-state card" id="emptyState">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48" style="color:var(--text-muted)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <p>左のリストからピアを選択してください</p>
+        </div>
+    </div>
+</div>
+
+<style>
+.page-header { margin-bottom: 24px; }
+.page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 6px; }
+.page-subtitle { color: var(--text-muted); font-size: 0.875rem; margin: 0; }
+
+.acl-layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 16px;
+    align-items: start;
+}
+@media (max-width: 768px) {
+    .acl-layout { grid-template-columns: 1fr; }
+}
+
+.card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.card-header {
+    padding: 14px 16px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.peer-items { padding: 8px; }
+.peer-item {
+    padding: 10px 12px;
+    border-radius: 7px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    transition: background 0.15s;
+}
+.peer-item:hover { background: rgba(255,255,255,0.05); }
+.peer-item.selected { background: var(--accent-soft); border: 1px solid rgba(34,197,94,0.3); }
+.peer-item-name { font-size: 0.9rem; font-weight: 500; }
+.peer-item-meta { font-size: 0.75rem; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
+.peer-badge {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+.peer-badge.active { background: rgba(34,197,94,0.2); color: #22c55e; }
+.peer-badge.inactive { background: rgba(156,163,175,0.2); color: #9ca3af; }
+
+.peer-ip-badge {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    background: rgba(255,255,255,0.05);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.add-rule-form {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,0.15);
+}
+.form-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group.flex-2 { flex: 2; min-width: 140px; }
+.form-group.form-group-btn { flex-shrink: 0; }
+label { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
+
+.action-toggle { display: flex; gap: 4px; }
+.action-btn {
+    display: flex; align-items: center; gap: 5px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.action-btn:hover { background: rgba(255,255,255,0.05); }
+.action-btn.active[data-action="allow"] {
+    background: rgba(34,197,94,0.15);
+    border-color: rgba(34,197,94,0.4);
+    color: #22c55e;
+}
+.action-btn.active[data-action="deny"] {
+    background: rgba(239,68,68,0.15);
+    border-color: rgba(239,68,68,0.4);
+    color: #ef4444;
+}
+
+.form-input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.form-input:focus { border-color: var(--accent); }
+.priority-input { width: 70px; }
+
+.priority-hint { font-size: 0.72rem; color: var(--text-muted); margin-top: 8px; }
+.error-msg { color: #ef4444; font-size: 0.8rem; margin-top: 8px; }
+
+.btn {
+    padding: 7px 16px;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.btn-primary {
+    background: var(--accent);
+    color: #000;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-danger {
+    background: transparent;
+    border: 1px solid rgba(239,68,68,0.4);
+    color: #ef4444;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+}
+.btn-danger:hover { background: rgba(239,68,68,0.12); }
+
+.rules-list { padding: 8px; }
+.rule-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    margin-bottom: 6px;
+    transition: border-color 0.15s;
+}
+.rule-item:hover { border-color: rgba(255,255,255,0.15); }
+.rule-action-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.rule-action-badge.allow { background: rgba(34,197,94,0.15); color: #22c55e; }
+.rule-action-badge.deny { background: rgba(239,68,68,0.15); color: #ef4444; }
+.rule-priority {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.05);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    font-family: monospace;
+}
+.rule-cidr { font-family: monospace; font-size: 0.88rem; flex: 1; }
+.rule-proto {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    font-family: monospace;
+    background: rgba(99,179,237,0.15);
+    color: #63b3ed;
+}
+.rule-desc { font-size: 0.78rem; color: var(--text-muted); flex: 1; }
+.proto-select { min-width: 80px; cursor: pointer; }
+.port-input { width: 110px; }
+.rule-delete { margin-left: auto; flex-shrink: 0; }
+
+.empty-rules {
+    padding: 32px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 48px 24px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.loading-text { padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+
+.acl-rules-area { min-width: 0; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedPeerId = null;
+let selectedPeerIp = null;
+let currentAction = 'allow';
+
+async function loadPeers() {
+    const res = await fetch('/api/peers/');
+    const peers = await res.json();
+    const container = document.getElementById('peerItems');
+    if (!peers.length) {
+        container.innerHTML = '<div class="loading-text">ピアが存在しません</div>';
+        return;
+    }
+    container.innerHTML = peers.map(p => `
+        <div class="peer-item" data-id="${p.id}" data-ip="${p.allocated_ip}" data-name="${escHtml(p.name)}" onclick="selectPeer(${p.id}, '${escHtml(p.allocated_ip)}', '${escHtml(p.name)}')">
+            <div class="peer-item-name">${escHtml(p.name)}</div>
+            <div class="peer-item-meta">
+                <span style="font-family:monospace;font-size:0.78rem;">${escHtml(p.allocated_ip)}</span>
+                <span class="peer-badge ${p.is_active ? 'active' : 'inactive'}">${p.is_active ? '有効' : '無効'}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function selectPeer(id, ip, name) {
+    selectedPeerId = id;
+    selectedPeerIp = ip;
+    document.querySelectorAll('.peer-item').forEach(el => el.classList.remove('selected'));
+    document.querySelector(`.peer-item[data-id="${id}"]`)?.classList.add('selected');
+    document.getElementById('selectedPeerName').textContent = name;
+    document.getElementById('selectedPeerIp').textContent = ip;
+    document.getElementById('rulesCard').style.display = '';
+    document.getElementById('emptyState').style.display = 'none';
+    await loadRules(id);
+}
+
+async function loadRules(peerId) {
+    const list = document.getElementById('rulesList');
+    list.innerHTML = '<div class="loading-text">読み込み中...</div>';
+    const res = await fetch(`/api/peers/${peerId}/acl`);
+    const data = await res.json();
+    const rules = data.rules || [];
+    if (!rules.length) {
+        list.innerHTML = '<div class="empty-rules">ルールがまだありません。上のフォームから追加してください。</div>';
+        return;
+    }
+    list.innerHTML = rules.map(r => {
+        const protoLabel = r.protocol && r.protocol !== 'any'
+            ? (r.port_range ? `${r.protocol.toUpperCase()}:${r.port_range}` : r.protocol.toUpperCase())
+            : '';
+        return `
+        <div class="rule-item" data-rule-id="${r.id}">
+            <span class="rule-action-badge ${r.action}">${r.action === 'allow' ? '許可' : '拒否'}</span>
+            <span class="rule-priority">P:${r.priority}</span>
+            <span class="rule-cidr">${escHtml(r.target_cidr)}</span>
+            ${protoLabel ? `<span class="rule-proto">${escHtml(protoLabel)}</span>` : ''}
+            <span class="rule-desc">${escHtml(r.description)}</span>
+            <button class="btn btn-danger rule-delete" onclick="deleteRule(${r.id})">削除</button>
+        </div>`;
+    }).join('');
+}
+
+async function deleteRule(ruleId) {
+    if (!selectedPeerId) return;
+    const res = await fetch(`/api/peers/${selectedPeerId}/acl/${ruleId}`, { method: 'DELETE' });
+    if (res.ok || res.status === 204) {
+        await loadRules(selectedPeerId);
+    } else {
+        alert('削除に失敗しました');
+    }
+}
+
+document.querySelectorAll('.action-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.action-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentAction = btn.dataset.action;
+    });
+});
+
+document.getElementById('addRuleBtn').addEventListener('click', async () => {
+    if (!selectedPeerId) return;
+    const cidr = document.getElementById('targetCidr').value.trim();
+    const desc = document.getElementById('ruleDesc').value.trim();
+    const priority = parseInt(document.getElementById('rulePriority').value) || 100;
+    const errEl = document.getElementById('addRuleError');
+    errEl.style.display = 'none';
+
+    if (!cidr) {
+        errEl.textContent = 'IPアドレス / CIDRを入力してください';
+        errEl.style.display = '';
+        return;
+    }
+
+    const protocol = document.getElementById('ruleProtocol').value;
+    const portRange = document.getElementById('rulePortRange').value.trim();
+
+    const res = await fetch(`/api/peers/${selectedPeerId}/acl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: currentAction, target_cidr: cidr, protocol, port_range: portRange, description: desc, priority }),
+    });
+
+    if (res.ok) {
+        document.getElementById('targetCidr').value = '';
+        document.getElementById('ruleProtocol').value = 'any';
+        document.getElementById('rulePortRange').value = '';
+        document.getElementById('portRangeGroup').style.display = 'none';
+        document.getElementById('ruleDesc').value = '';
+        document.getElementById('rulePriority').value = '100';
+        await loadRules(selectedPeerId);
+    } else {
+        const text = await res.text();
+        errEl.textContent = text || '追加に失敗しました';
+        errEl.style.display = '';
+    }
+});
+
+function onProtocolChange() {
+    const proto = document.getElementById('ruleProtocol').value;
+    const portGroup = document.getElementById('portRangeGroup');
+    portGroup.style.display = (proto === 'tcp' || proto === 'udp') ? '' : 'none';
+    if (proto !== 'tcp' && proto !== 'udp') {
+        document.getElementById('rulePortRange').value = '';
+    }
+}
+
+function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+loadPeers();
+</script>
+{% endblock %}

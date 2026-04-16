@@ -18,6 +18,8 @@ pub fn build_env() -> Environment<'static> {
         .expect("add docs_list.html");
     env.add_template("docs_view.html", include_str!("../../../templates/docs_view.html"))
         .expect("add docs_view.html");
+    env.add_template("acl.html", include_str!("../../../templates/acl.html"))
+        .expect("add acl.html");
 
     env
 }
@@ -43,6 +45,12 @@ pub fn render_peers(env: &Environment<'static>) -> Result<String, String> {
 pub fn render_settings(env: &Environment<'static>) -> Result<String, String> {
     let tmpl = env.get_template("settings.html").map_err(|e| e.to_string())?;
     tmpl.render(context! { active_page => "settings" })
+        .map_err(|e| e.to_string())
+}
+
+pub fn render_acl(env: &Environment<'static>) -> Result<String, String> {
+    let tmpl = env.get_template("acl.html").map_err(|e| e.to_string())?;
+    tmpl.render(context! { active_page => "acl" })
         .map_err(|e| e.to_string())
 }
 

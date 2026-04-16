@@ -198,6 +198,191 @@ fn handle_peer_remove(interface: &str, public_key: &str) -> Value {
     }
 }
 
+// ---- nftables ACL ----
+//
+// wgwm テーブルだけを完全管理する。他のテーブルには一切触れない。
+//
+// テーブル構造:
+//   table inet wgwm {
+//     chain forward {
+//       type filter hook forward priority 0; policy accept;
+//       # ピアごとのルールが priority 昇順で並ぶ
+//       ip saddr 10.0.0.2 ip daddr 192.168.1.0/24 drop  comment "wgwm: peer 10.0.0.2 deny"
+//       ip saddr 10.0.0.2 ip daddr 10.0.0.0/24   accept comment "wgwm: peer 10.0.0.2 allow"
+//     }
+//   }
+
+use wg_common::worker_protocol::{AclRule, PeerAclEntry};
+
+/// nft コマンドを実行
+fn run_nft(args: &[&str]) -> Result<String, String> {
+    Command::new("nft")
+        .args(args)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "nft コマンドが見つかりません。nftables がインストールされているか確認してください \
+                 (apt install nftables)"
+                    .to_string()
+            } else {
+                format!("nft コマンドの起動に失敗しました: {e}")
+            }
+        })
+        .and_then(|out| {
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        })
+}
+
+/// wgwm テーブルが存在するか確認
+fn wgwm_table_exists() -> bool {
+    run_nft(&["list", "table", "inet", "wgwm"]).is_ok()
+}
+
+/// wgwm テーブルを初期化（存在しなければ作成）
+fn ensure_wgwm_table() -> Result<(), String> {
+    if !wgwm_table_exists() {
+        run_nft(&[
+            "add", "table", "inet", "wgwm",
+        ])?;
+        run_nft(&[
+            "add", "chain", "inet", "wgwm", "forward",
+            "{ type filter hook forward priority 0; policy accept; }",
+        ])?;
+        tracing::info!("nftables: wgwm テーブルを作成しました");
+    }
+    Ok(())
+}
+
+/// ルール 1 件分の nft add ルール文字列を生成
+fn build_nft_rule(peer_ip: &str, rule: &AclRule) -> String {
+    let verdict = match rule.action.as_str() {
+        "allow" => "accept",
+        _       => "drop",
+    };
+
+    // プロトコル + ポート範囲の nft 式を組み立て
+    let proto_expr = match rule.protocol.as_str() {
+        "tcp" | "udp" => {
+            let proto = rule.protocol.as_str();
+            if rule.port_range.trim().is_empty() {
+                // ポート未指定: プロトコルのみ
+                format!("{} ", proto)
+            } else if rule.port_range.contains('-') {
+                // 範囲指定: "80-443" → "tcp dport 80-443"
+                format!("{} dport {} ", proto, rule.port_range.trim())
+            } else {
+                // 単一ポート: "80" → "tcp dport 80"
+                format!("{} dport {} ", proto, rule.port_range.trim())
+            }
+        }
+        "icmp" => "meta l4proto icmp ".to_string(),
+        _ => String::new(),  // "any" またはその他: プロトコル指定なし
+    };
+
+    let desc = if rule.description.is_empty() {
+        format!("wgwm: {} {} {}", peer_ip, rule.action, rule.target_cidr)
+    } else {
+        format!("wgwm: {} {} {} ({})", peer_ip, rule.action, rule.target_cidr, rule.description)
+    };
+    // comment はダブルクォートで囲む
+    format!(
+        "ip saddr {} ip daddr {} {}{}comment \"{}\"",
+        peer_ip, rule.target_cidr, proto_expr, verdict, desc
+    )
+}
+
+/// 指定ピアの ACL ルールをすべて削除し、新しいルールを適用する（冪等）
+fn apply_peer_acl(peer_ip: &str, rules: &[AclRule]) -> Value {
+    if let Err(e) = ensure_wgwm_table() {
+        return serde_json::json!({ "ok": false, "error": e });
+    }
+
+    // 既存の当該ピアのルールを削除（comment で grep）
+    // nft list chain → 行ごとに handle を探して削除
+    let chain_dump = match run_nft(&["--handle", "list", "chain", "inet", "wgwm", "forward"]) {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({ "ok": false, "error": format!("chain dump 失敗: {}", e) }),
+    };
+
+    // "wgwm: <peer_ip> " を含む行の handle を収集して削除
+    let search = format!("wgwm: {}", peer_ip);
+    let mut handles_to_delete: Vec<String> = Vec::new();
+    for line in chain_dump.lines() {
+        if line.contains(&search) {
+            // "# handle N" の形式で行末に handle が来る
+            if let Some(h) = line.split("# handle ").nth(1) {
+                let handle = h.trim().to_string();
+                if !handle.is_empty() {
+                    handles_to_delete.push(handle);
+                }
+            }
+        }
+    }
+    for handle in &handles_to_delete {
+        if let Err(e) = run_nft(&["delete", "rule", "inet", "wgwm", "forward", "handle", handle]) {
+            tracing::warn!("nftables: handle {} の削除に失敗: {}", handle, e);
+        }
+    }
+
+    // 新しいルールを priority 順（昇順）に追加
+    let mut sorted_rules = rules.to_vec();
+    sorted_rules.sort_by_key(|r| r.priority);
+
+    for rule in &sorted_rules {
+        let rule_expr = build_nft_rule(peer_ip, rule);
+        if let Err(e) = run_nft(&["add", "rule", "inet", "wgwm", "forward", &rule_expr]) {
+            tracing::error!("nftables: ルール追加失敗 (peer={}): {} — {}", peer_ip, rule_expr, e);
+            return serde_json::json!({ "ok": false, "error": format!("ルール追加失敗: {}", e) });
+        }
+    }
+
+    tracing::info!(
+        "nftables: peer={} のACLを適用しました ({} ルール, {} 削除)",
+        peer_ip, sorted_rules.len(), handles_to_delete.len()
+    );
+    serde_json::json!({ "ok": true })
+}
+
+/// 全ピアの ACL を一括再適用（起動時リストア）
+fn reload_all_acl(peers: &[PeerAclEntry]) -> Value {
+    // テーブルごと再作成して全ルールをクリーンに適用する
+    if wgwm_table_exists() {
+        if let Err(e) = run_nft(&["flush", "table", "inet", "wgwm"]) {
+            tracing::warn!("nftables: wgwm テーブルの flush に失敗: {}", e);
+        }
+    }
+    if let Err(e) = ensure_wgwm_table() {
+        return serde_json::json!({ "ok": false, "error": e });
+    }
+
+    let mut errors: Vec<String> = Vec::new();
+    for entry in peers {
+        if entry.rules.is_empty() {
+            continue;
+        }
+        let mut sorted = entry.rules.clone();
+        sorted.sort_by_key(|r| r.priority);
+        for rule in &sorted {
+            let rule_expr = build_nft_rule(&entry.peer_ip, rule);
+            if let Err(e) = run_nft(&["add", "rule", "inet", "wgwm", "forward", &rule_expr]) {
+                errors.push(format!("peer={} rule={}: {}", entry.peer_ip, rule_expr, e));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        tracing::info!("nftables: 全ACLを再適用しました ({} ピア)", peers.len());
+        serde_json::json!({ "ok": true })
+    } else {
+        tracing::error!("nftables: 再適用中にエラーが発生しました: {:?}", errors);
+        serde_json::json!({ "ok": false, "error": errors.join("; ") })
+    }
+}
+
 fn handle_update_wireguard() -> Value {
     tracing::info!("wireguard-tools のアップデートを開始します");
     let update_out = Command::new("apt-get")
@@ -246,6 +431,21 @@ fn handle_request(interface: &str, req: &Value) -> Value {
             handle_peer_remove(interface, pk)
         }
         "update_wireguard" => handle_update_wireguard(),
+        "apply_acl_rules" => {
+            let peer_ip = req.get("peer_ip").and_then(|v| v.as_str()).unwrap_or("");
+            let rules: Vec<AclRule> = req
+                .get("rules")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            apply_peer_acl(peer_ip, &rules)
+        }
+        "reload_all_acl" => {
+            let peers: Vec<PeerAclEntry> = req
+                .get("peers")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            reload_all_acl(&peers)
+        }
         _ => {
             tracing::warn!("不明なコマンドを受信しました: '{}'", cmd);
             serde_json::json!({ "ok": false, "error": format!("unknown cmd: {}", cmd) })

@@ -92,6 +92,34 @@ pub fn update_wireguard(settings: &Settings) -> Result<String, String> {
     Ok(resp.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string())
 }
 
+pub fn apply_acl_rules(
+    settings: &Settings,
+    peer_ip: &str,
+    rules: &[wg_common::worker_protocol::AclRule],
+) -> Result<(), String> {
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "cmd": "apply_acl_rules",
+        "peer_ip": peer_ip,
+        "rules": rules,
+    }))
+    .map_err(|e| e.to_string())?;
+    let _ = request(settings, &payload)?;
+    Ok(())
+}
+
+pub fn reload_all_acl(
+    settings: &Settings,
+    peers: &[wg_common::worker_protocol::PeerAclEntry],
+) -> Result<(), String> {
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "cmd": "reload_all_acl",
+        "peers": peers,
+    }))
+    .map_err(|e| e.to_string())?;
+    let _ = request(settings, &payload)?;
+    Ok(())
+}
+
 pub fn peer_remove(settings: &Settings, public_key: &str) -> Result<(), String> {
     let payload = serde_json::to_vec(&serde_json::json!({
         "cmd": "peer_remove",
